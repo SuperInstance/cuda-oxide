@@ -606,9 +606,7 @@ fn emit_scalar_to_niched_enum(
     // sources that's just the niche bit pattern; for pointer sources we
     // construct it as `inttoptr i64 <niche_start>` (which folds to `null`
     // when niche_start is 0, the case rustc actually emits).
-    let src_is_ptr = val_ty
-        .deref(ctx)
-        .is::<dialect_llvm::types::PointerType>();
+    let src_is_ptr = val_ty.deref(ctx).is::<dialect_llvm::types::PointerType>();
     let cmp_const = if src_is_ptr {
         let i64_ty: Ptr<pliron::r#type::TypeObj> =
             IntegerType::get(ctx, 64, Signedness::Signless).into();
