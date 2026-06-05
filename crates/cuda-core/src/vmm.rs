@@ -31,6 +31,8 @@ unsafe fn set_mem_location_device(
     device: cuda_bindings::CUdevice,
 ) {
     loc.type_ = cuda_bindings::CUmemLocationType_enum_CU_MEM_LOCATION_TYPE_DEVICE;
+    // SAFETY: `CUmemLocation_st` has `id` at offset 4 within an anonymous union.
+    // The memory layout is identical across CUDA versions we support.
     unsafe {
         let base = loc as *mut _ as *mut u8;
         (base.add(4) as *mut i32).write(device);
@@ -61,6 +63,8 @@ impl PhysicalAllocation {
         unsafe { set_mem_location_device(&mut prop.location, device) };
 
         let mut handle = MaybeUninit::uninit();
+        // SAFETY: `handle` is a valid `MaybeUninit` out-param for the driver.
+        // `assume_init` is safe after `cuMemCreate` returns success.
         unsafe {
             cuda_bindings::cuMemCreate(handle.as_mut_ptr(), size, &prop, 0).result()?;
             Ok(Self {
@@ -83,6 +87,8 @@ impl PhysicalAllocation {
 
 impl Drop for PhysicalAllocation {
     fn drop(&mut self) {
+        // SAFETY: `self.handle` is a valid `CUmemGenericAllocationHandle`
+        // returned by `cuMemCreate` and not yet released.
         unsafe {
             let _ = cuda_bindings::cuMemRelease(self.handle).result();
         }
@@ -107,6 +113,8 @@ impl VirtualReservation {
     /// allocation granularity. `alignment` can be 0 to let the driver choose.
     pub fn new(size: usize, alignment: usize) -> Result<Self, DriverError> {
         let mut base = MaybeUninit::uninit();
+        // SAFETY: `base` is a valid `MaybeUninit` out-param for the driver.
+        // `assume_init` is safe after `cuMemAddressReserve` returns success.
         unsafe {
             cuda_bindings::cuMemAddressReserve(base.as_mut_ptr(), size, alignment, 0, 0)
                 .result()?;
@@ -130,6 +138,9 @@ impl VirtualReservation {
 
 impl Drop for VirtualReservation {
     fn drop(&mut self) {
+        // SAFETY: `self.base` is a valid VA range reserved by `cuMemAddressReserve`
+        // and `self.size` matches the reservation size. All mappings must be
+        // dropped before this reservation is freed.
         unsafe {
             let _ = cuda_bindings::cuMemAddressFree(self.base, self.size).result();
         }
@@ -158,6 +169,10 @@ impl Mapping {
         phys: &PhysicalAllocation,
         offset: usize,
     ) -> Result<Self, DriverError> {
+        // SAFETY: `va` must belong to a valid `VirtualReservation`, `phys.handle()`
+        // must be a valid `CUmemGenericAllocationHandle`, and `size` must be a
+        // multiple of the allocation granularity. These invariants are documented
+        // on `VirtualReservation` and `PhysicalAllocation`.
         unsafe {
             cuda_bindings::cuMemMap(va, size, offset, phys.handle(), 0).result()?;
         }
@@ -177,6 +192,9 @@ impl Mapping {
 
 impl Drop for Mapping {
     fn drop(&mut self) {
+        // SAFETY: `self.va` and `self.size` describe a valid mapping created by
+        // `cuMemMap`. The caller must drop all `Mapping`s before dropping the
+        // underlying `VirtualReservation` or `PhysicalAllocation`.
         unsafe {
             let _ = cuda_bindings::cuMemUnmap(self.va, self.size).result();
         }
@@ -205,6 +223,8 @@ pub fn set_access(
         })
         .collect();
 
+    // SAFETY: `descs` is a valid slice of `CUmemAccessDesc_st` with one entry
+    // per target device. `va` and `size` must describe a mapped reservation.
     unsafe { cuda_bindings::cuMemSetAccess(va, size, descs.as_ptr(), descs.len()) }.result()
 }
 
@@ -218,6 +238,8 @@ pub fn allocation_granularity(device: cuda_bindings::CUdevice) -> Result<usize, 
     unsafe { set_mem_location_device(&mut prop.location, device) };
 
     let mut granularity = MaybeUninit::uninit();
+    // SAFETY: `granularity` is a valid `MaybeUninit` out-param for the driver.
+    // `assume_init` is safe after `cuMemGetAllocationGranularity` returns success.
     unsafe {
         cuda_bindings::cuMemGetAllocationGranularity(
             granularity.as_mut_ptr(),

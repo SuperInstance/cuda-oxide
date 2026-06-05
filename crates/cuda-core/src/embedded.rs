@@ -12,34 +12,50 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// A loadable CUDA module discovered from an embedded artifact bundle.
+///
+/// Wraps an [`OwnedArtifactBundle`] and guarantees that at least one loadable
+/// payload (cubin or PTX) is present. Created via [`EmbeddedModule::new`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EmbeddedModule {
     bundle: OwnedArtifactBundle,
 }
 
 impl EmbeddedModule {
+    /// Creates an [`EmbeddedModule`] from `bundle` if it contains a loadable
+    /// payload (cubin or PTX). Returns `None` otherwise.
     pub fn new(bundle: OwnedArtifactBundle) -> Option<Self> {
         loadable_payload(&bundle)
             .is_some()
             .then_some(Self { bundle })
     }
 
+    /// Returns the bundle name (typically the crate package name).
     pub fn name(&self) -> &str {
         &self.bundle.name
     }
 
+    /// Returns the bundle target (e.g. `"sm_90"`).
     pub fn target(&self) -> &str {
         &self.bundle.target
     }
 
+    /// Returns the underlying [`OwnedArtifactBundle`].
     pub fn bundle(&self) -> &OwnedArtifactBundle {
         &self.bundle
     }
 
+    /// Returns the payload of `kind` if present.
     pub fn payload(&self, kind: ArtifactPayloadKind) -> Option<&[u8]> {
         self.bundle.payload(kind)
     }
 
+    /// Loads this embedded module into `ctx`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EmbeddedModuleError::Driver`] if the CUDA driver rejects the
+    /// module image.
     pub fn load(&self, ctx: &Arc<CudaContext>) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
         let image =
             loadable_payload(&self.bundle).expect("EmbeddedModule always has a loadable payload");
@@ -48,6 +64,9 @@ impl EmbeddedModule {
     }
 }
 
+/// Discovers all artifact bundles embedded in the current executable.
+///
+/// Reads the running binary and parses any embedded artifact sections.
 pub fn artifact_bundles_from_current_exe() -> Result<Vec<OwnedArtifactBundle>, EmbeddedModuleError>
 {
     let path =
@@ -55,6 +74,7 @@ pub fn artifact_bundles_from_current_exe() -> Result<Vec<OwnedArtifactBundle>, E
     artifact_bundles_from_binary_path(path)
 }
 
+/// Discovers all artifact bundles embedded in the binary at `path`.
 pub fn artifact_bundles_from_binary_path(
     path: impl AsRef<Path>,
 ) -> Result<Vec<OwnedArtifactBundle>, EmbeddedModuleError> {
@@ -67,6 +87,9 @@ pub fn artifact_bundles_from_binary_path(
         .map_err(EmbeddedModuleError::Artifacts)
 }
 
+/// Discovers all loadable embedded CUDA modules in the current executable.
+///
+/// Filters the artifact bundles to only those containing a cubin or PTX payload.
 pub fn embedded_modules_from_current_exe() -> Result<Vec<EmbeddedModule>, EmbeddedModuleError> {
     Ok(artifact_bundles_from_current_exe()?
         .into_iter()
@@ -74,6 +97,11 @@ pub fn embedded_modules_from_current_exe() -> Result<Vec<EmbeddedModule>, Embedd
         .collect())
 }
 
+/// Loads the first embedded module named `name` from the current executable.
+///
+/// # Errors
+///
+/// Returns [`EmbeddedModuleError::ModuleNotFound`] if no matching module exists.
 pub fn load_embedded_module(
     ctx: &Arc<CudaContext>,
     name: &str,
@@ -87,6 +115,11 @@ pub fn load_embedded_module(
     module.load(ctx)
 }
 
+/// Loads the first embedded CUDA module found in the current executable.
+///
+/// # Errors
+///
+/// Returns [`EmbeddedModuleError::NoModules`] if no loadable modules are present.
 pub fn load_first_embedded_module(
     ctx: &Arc<CudaContext>,
 ) -> Result<Arc<CudaModule>, EmbeddedModuleError> {
