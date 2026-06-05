@@ -57,6 +57,8 @@ pub fn enable_peer_access(
     to: &Arc<CudaContext>,
 ) -> Result<(), DriverError> {
     from.bind_to_thread()?;
+    // SAFETY: bind_to_thread() makes from's context current; to.cu_ctx() is a valid
+    // CUcontext from the same process. Flags must be 0 per the CUDA spec.
     let result = unsafe { cuda_bindings::cuCtxEnablePeerAccess(to.cu_ctx(), 0) };
     match result {
         cuda_bindings::cudaError_enum_CUDA_SUCCESS => Ok(()),
@@ -75,6 +77,8 @@ pub fn disable_peer_access(
     to: &Arc<CudaContext>,
 ) -> Result<(), DriverError> {
     from.bind_to_thread()?;
+    // SAFETY: bind_to_thread() makes from's context current; to.cu_ctx() is a valid
+    // CUcontext whose peer access we are revoking.
     let result = unsafe { cuda_bindings::cuCtxDisablePeerAccess(to.cu_ctx()) };
     match result {
         cuda_bindings::cudaError_enum_CUDA_SUCCESS => Ok(()),

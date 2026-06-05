@@ -55,6 +55,9 @@ impl DriverError {
     /// code (e.g., it is from a newer driver version).
     pub fn error_name(&self) -> Result<&CStr, DriverError> {
         let mut err_str = MaybeUninit::uninit();
+        // SAFETY: err_str is a valid MaybeUninit out-param. cuGetErrorName writes a
+        // non-null pointer to driver-owned static memory on success; assume_init and
+        // CStr::from_ptr are sound because we propagate any driver error first.
         unsafe {
             cuda_bindings::cuGetErrorName(self.0, err_str.as_mut_ptr()).result()?;
             Ok(CStr::from_ptr(err_str.assume_init()))
@@ -67,6 +70,9 @@ impl DriverError {
     /// and valid for the lifetime of the loaded driver library.
     pub fn error_string(&self) -> Result<&CStr, DriverError> {
         let mut err_str = MaybeUninit::uninit();
+        // SAFETY: err_str is a valid MaybeUninit out-param. cuGetErrorString writes a
+        // pointer to driver-owned static memory on success; the pointer is valid for
+        // the lifetime of the driver library and non-null when the call succeeds.
         unsafe {
             cuda_bindings::cuGetErrorString(self.0, err_str.as_mut_ptr()).result()?;
             Ok(CStr::from_ptr(err_str.assume_init()))
@@ -116,6 +122,7 @@ impl IntoResult<()> for cuda_bindings::CUresult {
 impl<T> IntoResult<T> for (cuda_bindings::CUresult, MaybeUninit<T>) {
     fn result(self) -> Result<T, DriverError> {
         match self.0 {
+            // SAFETY: CUDA_SUCCESS guarantees the driver initialized self.1.
             cuda_bindings::cudaError_enum_CUDA_SUCCESS => Ok(unsafe { self.1.assume_init() }),
             _ => Err(DriverError(self.0)),
         }

@@ -55,6 +55,8 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
     pub fn zeroed(ctx: &Arc<CudaContext>, len: usize) -> Result<Self, DriverError> {
         let mut buffer = Self::allocate(ctx, len)?;
         if buffer.num_bytes != 0 {
+            // SAFETY: buffer.ptr is a valid pinned allocation of num_bytes bytes.
+            // T: DeviceCopy guarantees the all-zero bit pattern is a valid value.
             unsafe {
                 std::ptr::write_bytes(buffer.as_mut_ptr().cast::<u8>(), 0, buffer.num_bytes);
             }
@@ -67,6 +69,8 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
     pub fn from_slice(ctx: &Arc<CudaContext>, data: &[T]) -> Result<Self, DriverError> {
         let buffer = Self::allocate(ctx, data.len())?;
         if !data.is_empty() {
+            // SAFETY: data and buffer.ptr are non-overlapping valid regions of
+            // data.len() elements each; allocate() guarantees the buffer is large enough.
             unsafe {
                 std::ptr::copy_nonoverlapping(data.as_ptr(), buffer.ptr.as_ptr(), data.len());
             }
@@ -113,12 +117,16 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
     /// Returns the buffer as a host slice.
     #[inline]
     pub fn as_slice(&self) -> &[T] {
+        // SAFETY: ptr is a NonNull<T> aligned allocation of len elements; shared
+        // borrow ensures no concurrent mutable access.
         unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
     /// Returns the buffer as a mutable host slice.
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
+        // SAFETY: ptr is a NonNull<T> aligned allocation of len elements; &mut self
+        // guarantees exclusive access for the duration of the borrow.
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 
@@ -128,6 +136,8 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
             NonNull::dangling()
         } else {
             ctx.bind_to_thread()?;
+            // SAFETY: num_bytes > 0 (checked above) and bind_to_thread() ensures a
+            // CUDA context is current on this thread.
             let ptr = unsafe { crate::memory::malloc_host(num_bytes)? };
             NonNull::new(ptr.cast::<T>()).ok_or(DriverError(
                 cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
@@ -149,6 +159,8 @@ impl<T: DeviceCopy> Drop for PinnedHostBuffer<T> {
         if self.num_bytes != 0 {
             self.ctx.record_err(self.ctx.bind_to_thread());
             self.ctx
+                // SAFETY: ptr was returned by malloc_host; num_bytes > 0 guard above
+                // ensures this is a real allocation; Drop has exclusive ownership.
                 .record_err(unsafe { crate::memory::free_host(self.ptr.as_ptr().cast()) });
         }
     }

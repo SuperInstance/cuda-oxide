@@ -70,6 +70,8 @@ impl Drop for CudaContext {
         self.record_err(self.bind_to_thread());
         let ctx = std::mem::replace(&mut self.cu_ctx, std::ptr::null_mut());
         if !ctx.is_null() {
+            // SAFETY: cu_device is a valid CUdevice from construction; we replaced
+            // cu_ctx with null so this runs at most once per CudaContext.
             self.record_err(unsafe {
                 cuda_bindings::cuDevicePrimaryCtxRelease_v2(self.cu_device).result()
             });
