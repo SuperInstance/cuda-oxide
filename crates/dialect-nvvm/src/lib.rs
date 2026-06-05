@@ -37,13 +37,17 @@
 //! | `clc`        | CLC cooperative launching       | sm_90+     |
 //! | `debug`      | `printf` / assertion support    | All        |
 
+/// NVVM dialect operations — GPU intrinsics for thread indexing, warp shuffle, atomics,
+/// TMA, wgmma, cluster barriers, debug printf, and more.
 pub mod ops;
 
 use pliron::context::Context;
 use pliron::dialect::{Dialect, DialectName};
 
+/// Name of the NVVM dialect in pliron (`"nvvm"`).
 pub const NVVM_DIALECT_NAME: &str = "nvvm";
 
+/// Register all NVVM dialect ops with the given context.
 pub fn register(ctx: &mut Context) {
     Dialect::register(ctx, &DialectName::new(NVVM_DIALECT_NAME));
 
