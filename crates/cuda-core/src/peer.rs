@@ -28,6 +28,9 @@ use std::sync::Arc;
 pub fn can_access_peer(from: &CudaContext, to: &CudaContext) -> Result<bool, DriverError> {
     let mut can_access = MaybeUninit::uninit();
     unsafe {
+        // SAFETY: `can_access` is a valid `MaybeUninit<i32>` pointer passed to
+        // the CUDA driver, which writes the result. `assume_init` is safe
+        // because `cuDeviceCanAccessPeer` returns `CUDA_SUCCESS`.
         cuda_bindings::cuDeviceCanAccessPeer(
             can_access.as_mut_ptr(),
             from.cu_device(),

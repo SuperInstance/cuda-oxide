@@ -3,10 +3,39 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! NVVM dialect definition.
+//! NVVM dialect — GPU intrinsic operations for LLVM's NVPTX backend.
 //!
-//! This dialect maps to LLVM's NVPTX backend intrinsics.
-//! It will be used to lower MIR intrinsics to GPU-specific operations.
+//! `dialect-nvvm` represents NVIDIA GPU intrinsics as Pliron IR operations.
+//! Each op in this dialect corresponds to one or more LLVM NVVM intrinsics
+//! (or inline PTX assembly), and is lowered to the LLVM dialect by `mir-lower`.
+//!
+//! # Dialect Position in the Pipeline
+//!
+//! ```text
+//! dialect-mir intrinsic call (e.g. MirIntrinsicOp for thread_id_x)
+//!       │  ← mir-importer translates GPU intrinsics here
+//!       ▼
+//! dialect-nvvm op (e.g. ReadPtxSregTidXOp)   ← THIS DIALECT
+//!       │  ← mir-lower emits LLVM intrinsic call / inline PTX
+//!       ▼
+//! llvm.call @llvm.nvvm.read.ptx.sreg.tid.x()
+//! ```
+//!
+//! # Operation Categories
+//!
+//! | Module       | Description                     | Arch       |
+//! |--------------|---------------------------------|------------|
+//! | `thread`     | Thread/block/grid index reads   | All        |
+//! | `warp`       | Shuffle, vote                   | All        |
+//! | `atomic`     | Atomic load/store/RMW/CAS       | sm_70+     |
+//! | `cluster`    | Thread-block-cluster + DSMEM    | Hopper+    |
+//! | `mbarrier`   | Async hardware barriers         | Hopper+    |
+//! | `tma`        | Tensor Memory Accelerator       | Hopper+    |
+//! | `wgmma`      | Warpgroup Matrix Multiply-Acc   | Hopper only|
+//! | `tcgen05`    | Tensor Core Gen 5               | Blackwell+ |
+//! | `stmatrix`   | Shared-mem matrix store         | Hopper+    |
+//! | `clc`        | CLC cooperative launching       | sm_90+     |
+//! | `debug`      | `printf` / assertion support    | All        |
 
 pub mod ops;
 

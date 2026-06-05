@@ -5,24 +5,12 @@
 
 //! Helper functions for `dialect-mir` → LLVM dialect lowering.
 //!
-//! This module provides utility functions that are shared across multiple
-//! operation converters. These helpers handle common tasks like:
+//! Shared utilities across operation converters: intrinsic declaration and
+//! IR hierarchy navigation. For constant creation, use
+//! [`crate::convert::intrinsics::common`] (`create_i{n}_const` variants that
+//! take a `DialectConversionRewriter`).
 //!
-//! - Creating LLVM constant values (integers of various widths)
-//! - Declaring LLVM intrinsic functions in the module
-//! - Navigating the IR hierarchy (finding parent functions and modules)
-//!
-//! # Organization
-//!
-//! The helpers are organized by functionality:
-//!
-//! ## Constants
-//!
-//! | Function                | Type  | Description                    |
-//! |-------------------------|-------|--------------------------------|
-//! | [`create_i1_constant`]  | `i1`  | Boolean constants (true/false) |
-//! | [`create_i32_constant`] | `i32` | 32-bit integer constants       |
-//! | [`create_i64_constant`] | `i64` | 64-bit integer constants       |
+//! # Functions
 //!
 //! ## Intrinsic Declaration
 //!
@@ -54,193 +42,9 @@
 use llvm_export::ops as llvm;
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::op_interfaces::SymbolOpInterface;
-use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::linked_list::ContainsLinkedList;
 use pliron::op::Op;
-use pliron::value::Value;
-
-// ============================================================================
-// Constant Creation
-// ============================================================================
-
-/// Create an i1 (boolean) constant value.
-///
-/// Creates an LLVM `ConstantOp` producing an `i1` value, which is the LLVM
-/// representation of a boolean. The operation is inserted at the back of
-/// the specified basic block.
-///
-/// # Arguments
-///
-/// * `ctx` - The pliron context for IR manipulation
-/// * `llvm_block` - The basic block to insert the constant into
-/// * `value` - The boolean value (`true` or `false`)
-///
-/// # Returns
-///
-/// `Ok(Value)` containing the SSA value produced by the constant operation,
-/// or an error if constant creation fails.
-///
-/// # Generated IR
-///
-/// ```llvm
-/// %0 = llvm.mlir.constant(1 : i1) : i1   ; for value = true
-/// %0 = llvm.mlir.constant(0 : i1) : i1   ; for value = false
-/// ```
-///
-/// # Example
-///
-/// ```ignore
-/// // Create a boolean constant for a predicate
-/// let predicate = create_i1_constant(ctx, llvm_block, true)?;
-/// // predicate can now be used as an operand in branch or select operations
-/// ```
-pub fn create_i1_constant(
-    ctx: &mut Context,
-    llvm_block: Ptr<BasicBlock>,
-    value: bool,
-) -> Result<Value, anyhow::Error> {
-    use pliron::builtin::attributes::IntegerAttr;
-    use pliron::utils::apint::APInt;
-    use std::num::NonZeroUsize;
-
-    // Create the i1 type
-    let i1_ty = IntegerType::get(ctx, 1, Signedness::Signless);
-
-    // Convert boolean to integer (1 for true, 0 for false)
-    let const_value = if value { 1i64 } else { 0i64 };
-
-    // Create the arbitrary-precision integer with 1-bit width
-    let width = NonZeroUsize::new(1).expect("1 is non-zero");
-    let apint = APInt::from_i64(const_value, width);
-
-    // Create the integer attribute
-    let int_attr = IntegerAttr::new(i1_ty, apint);
-
-    // Create and insert the LLVM constant operation
-    let const_op = llvm::ConstantOp::new(ctx, int_attr.into());
-    const_op.get_operation().insert_at_back(llvm_block, ctx);
-
-    // Return the result value
-    Ok(const_op.get_operation().deref(ctx).get_result(0))
-}
-
-/// Create an i32 (32-bit integer) constant value.
-///
-/// Creates an LLVM `ConstantOp` producing an `i32` value. The operation is
-/// inserted at the back of the specified basic block.
-///
-/// # Arguments
-///
-/// * `ctx` - The pliron context for IR manipulation
-/// * `llvm_block` - The basic block to insert the constant into
-/// * `value` - The 32-bit integer value
-///
-/// # Returns
-///
-/// `Ok(Value)` containing the SSA value produced by the constant operation,
-/// or an error if constant creation fails.
-///
-/// # Generated IR
-///
-/// ```llvm
-/// %0 = llvm.mlir.constant(42 : i32) : i32
-/// ```
-///
-/// # Example
-///
-/// ```ignore
-/// // Create constant for array index
-/// let index = create_i32_constant(ctx, llvm_block, 0)?;
-///
-/// // Create constant for warp mask (all lanes)
-/// let full_mask = create_i32_constant(ctx, llvm_block, -1)?; // 0xFFFFFFFF
-/// ```
-#[allow(dead_code)]
-pub fn create_i32_constant(
-    ctx: &mut Context,
-    llvm_block: Ptr<BasicBlock>,
-    value: i32,
-) -> Result<Value, anyhow::Error> {
-    use pliron::builtin::attributes::IntegerAttr;
-    use pliron::utils::apint::APInt;
-    use std::num::NonZeroUsize;
-
-    // Create the i32 type
-    let i32_ty = IntegerType::get(ctx, 32, Signedness::Signless);
-
-    // Create the arbitrary-precision integer with 32-bit width
-    let width = NonZeroUsize::new(32).expect("32 is non-zero");
-    let apint = APInt::from_i64(i64::from(value), width);
-
-    // Create the integer attribute
-    let int_attr = IntegerAttr::new(i32_ty, apint);
-
-    // Create and insert the LLVM constant operation
-    let const_op = llvm::ConstantOp::new(ctx, int_attr.into());
-    const_op.get_operation().insert_at_back(llvm_block, ctx);
-
-    // Return the result value
-    Ok(const_op.get_operation().deref(ctx).get_result(0))
-}
-
-/// Create an i64 (64-bit integer) constant value.
-///
-/// Creates an LLVM `ConstantOp` producing an `i64` value. The operation is
-/// inserted at the back of the specified basic block.
-///
-/// # Arguments
-///
-/// * `ctx` - The pliron context for IR manipulation
-/// * `llvm_block` - The basic block to insert the constant into
-/// * `value` - The 64-bit integer value
-///
-/// # Returns
-///
-/// `Ok(Value)` containing the SSA value produced by the constant operation,
-/// or an error if constant creation fails.
-///
-/// # Generated IR
-///
-/// ```llvm
-/// %0 = llvm.mlir.constant(1234567890123 : i64) : i64
-/// ```
-///
-/// # Example
-///
-/// ```ignore
-/// // Create constant for pointer arithmetic
-/// let offset = create_i64_constant(ctx, llvm_block, 1024)?;
-///
-/// // Create constant for size calculation
-/// let element_size = create_i64_constant(ctx, llvm_block, 4)?;
-/// ```
-pub fn create_i64_constant(
-    ctx: &mut Context,
-    llvm_block: Ptr<BasicBlock>,
-    value: i64,
-) -> Result<Value, anyhow::Error> {
-    use pliron::builtin::attributes::IntegerAttr;
-    use pliron::utils::apint::APInt;
-    use std::num::NonZeroUsize;
-
-    // Create the i64 type
-    let i64_ty = IntegerType::get(ctx, 64, Signedness::Signless);
-
-    // Create the arbitrary-precision integer with 64-bit width
-    let width = NonZeroUsize::new(64).expect("64 is non-zero");
-    let apint = APInt::from_i64(value, width);
-
-    // Create the integer attribute
-    let int_attr = IntegerAttr::new(i64_ty, apint);
-
-    // Create and insert the LLVM constant operation
-    let const_op = llvm::ConstantOp::new(ctx, int_attr.into());
-    const_op.get_operation().insert_at_back(llvm_block, ctx);
-
-    // Return the result value
-    Ok(const_op.get_operation().deref(ctx).get_result(0))
-}
 
 // ============================================================================
 // Intrinsic Declaration

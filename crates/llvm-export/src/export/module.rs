@@ -305,9 +305,6 @@ pub(super) fn export_module_to_string_with_config(
         writeln!(&mut output, "attributes #0 = {{ convergent }}").unwrap();
     }
 
-    // Emit nvvm.annotations metadata
-    // - Default: Only for kernels with cluster configuration or launch bounds
-    // - Alternate backends: May require annotations for ALL kernels
     let has_special_kernels =
         !state.cluster_kernels.is_empty() || !state.launch_bounds_kernels.is_empty();
     let needs_annotations =
@@ -315,124 +312,17 @@ pub(super) fn export_module_to_string_with_config(
 
     if needs_annotations {
         writeln!(&mut output).unwrap();
-
-        let mut metadata_refs = Vec::new();
-        let mut md_id = 0;
-
-        // If backend requires annotations for all kernels, emit basic annotations first
-        // (unless they have cluster/launch_bounds which will be emitted below with more detail)
-        if emit_all_annotations {
-            // Collect names of kernels that have special configs (they'll get detailed annotations)
-            let special_kernel_names: std::collections::HashSet<&str> = state
-                .cluster_kernels
-                .iter()
-                .map(|k| k.name.as_str())
-                .chain(state.launch_bounds_kernels.iter().map(|k| k.name.as_str()))
-                .collect();
-
-            // Emit basic annotation for kernels WITHOUT special configs
-            for kernel in state.all_kernels.iter() {
-                if !special_kernel_names.contains(kernel.name.as_str()) {
-                    // Basic kernel annotation: !{ptr @kernel_name, !"kernel", i32 1}
-                    writeln!(
-                        &mut output,
-                        "!{} = !{{ptr @{}, !\"kernel\", i32 1}}",
-                        md_id, kernel.name
-                    )
-                    .unwrap();
-                    metadata_refs.push(format!("!{}", md_id));
-                    md_id += 1;
-                }
-            }
-        }
-
-        // Each kernel with cluster config gets its own metadata node
-        // Format: !{ptr @kernel_name, !"kernel", i32 1, !"cluster_dim_x", i32 X, ...}
-        for cfg in state.cluster_kernels.iter() {
-            writeln!(
-                &mut output,
-                "!{} = !{{ptr @{}, !\"kernel\", i32 1, !\"cluster_dim_x\", i32 {}, !\"cluster_dim_y\", i32 {}, !\"cluster_dim_z\", i32 {}}}",
-                md_id, cfg.name, cfg.dim_x, cfg.dim_y, cfg.dim_z
-            )
-            .unwrap();
-            metadata_refs.push(format!("!{}", md_id));
-            md_id += 1;
-        }
-
-        // Each kernel with launch bounds gets its own metadata node
-        // LLVM NVPTX expects separate annotations: !"maxntidx", !"maxntidy", !"maxntidz", !"minctapersm"
-        // See: https://llvm.org/docs/NVPTXUsage.html
-        for cfg in state.launch_bounds_kernels.iter() {
-            // Emit maxntidx (we use the single max_threads value for 1D block size)
-            writeln!(
-                &mut output,
-                "!{} = !{{ptr @{}, !\"maxntidx\", i32 {}}}",
-                md_id, cfg.name, cfg.max_threads
-            )
-            .unwrap();
-            metadata_refs.push(format!("!{}", md_id));
-            md_id += 1;
-
-            // Emit maxntidy = 1 (for complete 3D specification)
-            writeln!(
-                &mut output,
-                "!{} = !{{ptr @{}, !\"maxntidy\", i32 1}}",
-                md_id, cfg.name
-            )
-            .unwrap();
-            metadata_refs.push(format!("!{}", md_id));
-            md_id += 1;
-
-            // Emit maxntidz = 1 (for complete 3D specification)
-            writeln!(
-                &mut output,
-                "!{} = !{{ptr @{}, !\"maxntidz\", i32 1}}",
-                md_id, cfg.name
-            )
-            .unwrap();
-            metadata_refs.push(format!("!{}", md_id));
-            md_id += 1;
-
-            // Emit minctasm as separate metadata node if specified (generates .minnctapersm in PTX)
-            if let Some(min_blocks) = cfg.min_blocks {
-                writeln!(
-                    &mut output,
-                    "!{} = !{{ptr @{}, !\"minctasm\", i32 {}}}",
-                    md_id, cfg.name, min_blocks
-                )
-                .unwrap();
-                metadata_refs.push(format!("!{}", md_id));
-                md_id += 1;
-            }
-        }
-
-        // The nvvm.annotations named metadata references all kernel metadata
-        writeln!(
-            &mut output,
-            "!nvvm.annotations = !{{{}}}",
-            metadata_refs.join(", ")
-        )
-        .unwrap();
+        emit_nvvm_annotations(&mut output, &state, emit_all_annotations);
     }
 
-    // Emit !nvvmir.version metadata if backend requests it
     if config.emit_nvvmir_version() {
         writeln!(&mut output).unwrap();
-        let version = config.nvvmir_version();
+        let ver = config.nvvmir_version();
+        let md_id = md_id_after_annotations(&state);
         writeln!(
             &mut output,
-            "!nvvmir.version = !{{!{}}}",
-            md_id_after_annotations(&state)
-        )
-        .unwrap();
-        writeln!(
-            &mut output,
-            "!{} = !{{i32 {}, i32 {}, i32 {}, i32 {}}}",
-            md_id_after_annotations(&state),
-            version[0],
-            version[1],
-            version[2],
-            version[3]
+            "!nvvmir.version = !{{!{}}}\n!{} = !{{i32 {}, i32 {}, i32 {}, i32 {}}}",
+            md_id, md_id, ver[0], ver[1], ver[2], ver[3]
         )
         .unwrap();
     }
