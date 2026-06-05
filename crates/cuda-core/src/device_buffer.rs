@@ -325,6 +325,8 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             dst.len(),
             self.len
         );
+        // SAFETY: dst.as_mut_ptr() is valid for self.len writes (assert above);
+        // self.ptr is a valid device pointer; stream.cu_stream() is valid.
         unsafe {
             crate::memory::memcpy_dtoh_async(
                 dst.as_mut_ptr(),
@@ -350,9 +352,8 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         stream: &CudaStream,
         dst: &mut PinnedHostBuffer<T>,
     ) -> Result<(), DriverError> {
-        // SAFETY: we synchronize the stream below before returning, so the
-        // pinned destination is no longer being written to by CUDA when the
-        // mutable borrow on `dst` is released to the caller.
+        // SAFETY: we synchronize the stream immediately below, so the DtoH copy will
+        // have completed before the mutable borrow on `dst` is released to the caller.
         unsafe { self.copy_to_pinned_host_async(stream, dst)? };
         stream.synchronize()
     }
@@ -392,6 +393,8 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             dst.len(),
             self.len
         );
+        // SAFETY: dst.as_mut_ptr() is a pinned buffer valid for self.len writes
+        // (assert above); self.ptr is a valid device pointer; stream.cu_stream() is valid.
         unsafe {
             crate::memory::memcpy_dtoh_async(
                 dst.as_mut_ptr(),
@@ -445,6 +448,8 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             self.len
         );
         let num_bytes = src.num_bytes();
+        // SAFETY: src.as_ptr() is a pinned host buffer valid for num_bytes reads;
+        // self.ptr has capacity for at least num_bytes (assert above); stream is valid.
         unsafe {
             crate::memory::memcpy_htod_async(self.ptr, src.as_ptr(), num_bytes, stream.cu_stream())
         }

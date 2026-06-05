@@ -90,6 +90,7 @@ use std::ffi::c_uint;
 /// - A CUDA-capable device and a compatible driver must be installed.
 /// - Must not be called from a GPU callback (`cuLaunchHostFunc`).
 pub unsafe fn init(flags: c_uint) -> Result<(), DriverError> {
+    // SAFETY: caller guarantees a CUDA driver is installed and flags == 0.
     unsafe { cuda_bindings::cuInit(flags) }.result()
 }
 
