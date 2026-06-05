@@ -4681,3 +4681,1233 @@ Ternary is not just a quantization scheme — it is a **computational physics** 
 
 ---
 
+
+---
+
+# Appendix: Scout 1 Analysis — cuda-oxide Compilation Pipeline (Late Arrival)
+
+## The Full 18-Crate Pipeline: Every Stage, Every Data Structure
+
+# cuda-oxide Deep Systems Analysis
+
+> **Scout Report** — SuperInstance fork edition, 2026-06-05  
+> **Scope:** Full 18-crate workspace, compilation pipeline, MIR→Pliron→PTX path, runtime architecture, and Flux→PTX integration gaps.
+
+---
+
+## Table of Contents
+
+1. [Executive Summary](#1-executive-summary)
+2. [Workspace Composition — All 18 Crates](#2-workspace-composition--all-18-crates)
+3. [Complete Compilation Pipeline Diagram](#3-complete-compilation-pipeline-diagram)
+4. [The MIR Format and How mir-importer Works](#4-the-mir-format-and-how-mir-importer-works)
+5. [Pliron IR System and Dialects](#5-pliron-ir-system-and-dialects)
+6. [mir-lower — MIR to LLVM Dialect](#6-mir-lower--mir-to-llvm-dialect)
+7. [llvm-export — Textual LLVM IR Emission](#7-llvm-export--textual-llvm-ir-emission)
+8. [PTX Generation from LLVM IR](#8-ptx-generation-from-llvm-ir)
+9. [The NVVM Dialect and NVPTX Backend](#9-the-nvvm-dialect-and-nvptx-backend)
+10. [rustc-codegen-cuda — Codegen Backend](#10-rustc-codegen-cuda--codegen-backend)
+11. [Runtime Architecture](#11-runtime-architecture)
+12. [Current Gaps for Flux→PTX Integration](#12-current-gaps-for-fluxptx-integration)
+13. [What flux-importer Needs to Hook Into](#13-what-flux-importer-needs-to-hook-into)
+14. [Key Data Structures and APIs at Each Stage](#14-key-data-structures-and-apis-at-each-stage)
+15. [Appendix: Crate Inventory](#appendix-crate-inventory)
+
+---
+
+## 1. Executive Summary
+
+**cuda-oxide** is a Rust-to-PTX compiler that treats GPU kernel compilation as a first-class compiler pipeline rather than a source-to-source transpiler. It ingests rustc's Stable MIR, translates it into a custom Pliron IR dialect (`dialect-mir`), lowers through LLVM dialect, and emits NVPTX assembly (PTX). Host and device code live in the same `.rs` file; the compiler backend splits them automatically.
+
+The SuperInstance fork extends the original NVlabs codebase with:
+- Full Hopper (sm_90/sm_90a) and Blackwell (sm_100a) instruction support
+- TMA, WGMMA, TCGen05, cluster, mbarrier, and stmatrix intrinsics
+- A typed async host runtime with VMM support
+- A vision for Flux→PTX integration (agent-native GPU compilation)
+
+**Total workspace:** 18 core crates + 2 auxiliary crates (fuzzer, reserved-oxide-symbols). The `rustc-codegen-cuda` crate lives *outside* the Cargo workspace because it requires nightly rustc features.
+
+---
+
+## 2. Workspace Composition — All 18 Crates
+
+### Layer 0: Build & Entrypoint
+
+| Crate | Role | Key Files |
+|-------|------|-----------|
+| **cargo-oxide** | Cargo subcommand that orchestrates dual host+device builds. Discovers CUDA toolkit and LLVM, provisions the rustc_codegen_cuda dylib, and embeds device artifacts into host binaries. | `src/main.rs`, `src/build.rs` |
+
+### Layer 1: Compiler Backend
+
+| Crate | Role | Key Files |
+|-------|------|-----------|
+| **rustc-codegen-cuda** | rustc codegen backend. Splits compilation into host (delegates to rustc_codegen_llvm) and device (extracts MIR, runs pipeline, emits PTX/LTOIR). | `src/lib.rs`, `src/collector.rs`, `src/device_codegen.rs` |
+| **mir-importer** | Translates rustc Stable MIR into `dialect-mir` Pliron IR. Handles alloca emission, rvalue translation, terminator/intrinsic dispatch, type translation, and address-space inference. | `src/translator/body.rs`, `src/translator/rvalue.rs`, `src/translator/terminator/mod.rs`, `src/pipeline.rs` |
+| **mir-lower** | Lowers `dialect-mir` to Pliron LLVM dialect via DialectConversion. Handles ABI flattening, function prologue reconstruction, GPU intrinsic lowering (LLVM intrinsics + inline PTX). | `src/lib.rs`, `src/lowering.rs`, `src/convert/` |
+| **dialect-mir** | Pliron dialect modeling Rust MIR semantics. 54 ops across 11 categories, 8 MIR-specific types, 6 attributes. | `src/ops/`, `src/types.rs`, `src/attributes.rs` |
+| **dialect-nvvm** | Pliron dialect modeling NVIDIA GPU intrinsics. ~119 ops across 12 categories (thread, warp, atomic, cluster, mbarrier, TMA, WGMMA, TCGen05, stmatrix, CLC, debug, grid). | `src/ops/`, `src/atomic.rs` |
+| **llvm-export** | Emits Pliron LLVM dialect as textual LLVM IR (.ll). Handles PHI-node generation, metadata emission, kernel annotations, and device extern declarations. | `src/export/module.rs`, `src/export/function.rs`, `src/export/ops.rs` |
+
+### Layer 2: Host Runtime
+
+| Crate | Role | Key Files |
+|-------|------|-----------|
+| **cuda-core** | Safe RAII wrappers around the CUDA driver API (cu*). CudaContext, CudaStream, DeviceBuffer, PinnedHostBuffer, CudaModule, CudaEvent, VMM APIs. | `src/context.rs`, `src/stream.rs`, `src/device_buffer.rs`, `src/module.rs`, `src/vmm.rs` |
+| **cuda-host** | Typed kernel launch layer generated by `#[cuda_module]` macro. LTOIR compilation via libNVVM + nvJitLink. Tiling helpers for tcgen05. | `src/launch.rs`, `src/ltoir.rs`, `src/embedded.rs` |
+| **cuda-async** | Lazy GPU operations + futures. DeviceOperation trait, DeviceFuture (implements std::future::Future), stream scheduling policies, DeviceBox. | `src/device_operation.rs`, `src/device_future.rs`, `src/launch.rs` |
+| **cuda-bindings** | Raw FFI bindings to libcuda, generated by bindgen. | `build.rs`, `wrapper.h` |
+| **libnvvm-sys** | FFI bindings to libNVVM (NVIDIA's LLVM IR compiler). | `build.rs` |
+| **nvjitlink-sys** | FFI bindings to nvJitLink (NVIDIA's LTOIR linker). | `build.rs` |
+
+### Layer 3: Device Runtime
+
+| Crate | Role | Key Files |
+|-------|------|-----------|
+| **cuda-device** | `#![no_std]` GPU intrinsic stubs. Thread indexing, atomics, shared memory, barriers, warp primitives, TMA, WGMMA, TCGen05, cooperative groups. Every function is an `unreachable!()` stub lowered by the backend. | `src/thread.rs`, `src/atomic.rs`, `src/shared.rs`, `src/barrier.rs`, `src/tma.rs`, `src/wgmma.rs`, `src/tcgen05.rs` |
+| **cuda-macros** | Proc macros: `#[kernel]`, `#[device]`, `#[cuda_module]`, `cuda_launch!`. Rewrites function names into reserved namespaces and generates host-side launch helpers. | `src/lib.rs` |
+
+### Support Crates
+
+| Crate | Role |
+|-------|------|
+| **oxide-artifacts** | Binary blob format (`.oxart` section) for embedding PTX/LTOIR/cubin into host ELF binaries. Versioned wire format with payload records and entry records. |
+| **reserved-oxide-symbols** | Internal naming contract. Defines reserved prefixes like `cuda_oxide_kernel_246e25db_` used by macros and backend for symbol detection. |
+| **fuzzer** | Differential codegen fuzzer support (random MIR → compare rustc vs cuda-oxide). Not part of the core 18. |
+
+---
+
+## 3. Complete Compilation Pipeline Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  RUST SOURCE CODE                                                           │
+│  #[kernel] fn vecadd(a: &[f32], mut b: DisjointSlice<f32>) { ... }         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  rustc frontend + cuda-oxide backend                                        │
+│  ────────────────────────────────────                                       │
+│  Phase 0: collector::collect_device_functions()                             │
+│    • Scans codegen units for kernel symbols (cuda_oxide_kernel_* prefix)   │
+│    • BFS walk of transitive device dependencies                             │
+│    • Extracts monomorphized Instance<'tcx> for each function                │
+│    • Classifies extern declarations for LTOIR linking                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PHASE 1: mir-importer — rustc Stable MIR → dialect-mir (alloca form)      │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  translator::body::translate_body()                                         │
+│    • emit_entry_allocas() — one mir.alloca per non-ZST local               │
+│    • For each reachable BasicBlock:                                         │
+│        translate_statement() → rvalue translation                          │
+│        translate_terminator() → intrinsic recognition / calls              │
+│    • Type translation: rustc TyKind → MirPtrType / MirSliceType / etc.     │
+│    • Address-space inference: fixed-point propagation over MIR body        │
+│  Output: dialect-mir module with mir.alloca + mir.load/store               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PHASE 2: Verification                                                      │
+│  pipeline::verify_operation()                                               │
+│    • Pliron structural verification (SSA dominance, type consistency)       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PHASE 3: SSA Promotion                                                     │
+│  pliron::opts::mem2reg()                                                    │
+│    • Promotes alloca slots to SSA values                                    │
+│    • Uses PromotableAllocationInterface (MirAllocaOp)                       │
+│    • Uses PromotableOpInterface (MirStoreOp, MirLoadOp)                     │
+│  Output: dialect-mir module (pure SSA, no alloca)                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PHASE 4: mir-lower — dialect-mir → LLVM dialect                           │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  lower_mir_to_llvm() via pliron DialectConversion                           │
+│    • MirFuncOp → llvm.func (flatten args, entry prologue)                  │
+│    • Mir arithmetic → llvm.add, llvm.fadd, llvm.sdiv, etc.                 │
+│    • Mir memory → llvm.load, llvm.store, llvm.alloca, llvm.getelementptr   │
+│    • GPU intrinsics → dialect-nvvm ops → @llvm.nvvm.* calls OR inline asm  │
+│    • Type conversion: sign stripping, struct padding, ZST elision           │
+│    • Function ABI: slices→(ptr,len), structs→flattened or byval            │
+│  Output: LLVM dialect module                                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PHASE 5: llvm-export — LLVM dialect → textual LLVM IR (.ll)               │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  export::export_module_with_externs()                                       │
+│    • Header: datalayout + target triple (nvptx64-unknown-unknown)          │
+│    • Device extern declarations (for nvJitLink FFI)                        │
+│    • Per-function emission: define/declare, SSA naming, PHI nodes          │
+│    • Block args → PHI nodes (predecessor map)                              │
+│    • Metadata: !nvvm.annotations (kernels), !nvvmir.version, @llvm.used    │
+│  Output: *.ll file                                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PHASE 6: llc (system LLVM tool, LLVM 21+)                                 │
+│  llc -march=nvptx64 -mcpu=sm_NNN                                          │
+│    • Target auto-detected from IR feature markers:                         │
+│      tcgen05 → sm_100a | wgmma.fence → sm_90a | cluster → sm_90 | default→sm_80│
+│  Output: *.ptx (textual PTX assembly)                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ALTERNATIVE PATH: NVVM IR / libdevice (skip llc)                          │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  If kernel calls __nv_* math functions:                                    │
+│    • llvm-export emits NVVM IR config (full datalayout, metadata)          │
+│    • libnvvm-sys compiles .ll → LTOIR (with libdevice.10.bc linked)       │
+│    • nvjitlink-sys links LTOIR modules → final cubin / PTX                 │
+│    • Loaded by CUDA driver via cuModuleLoadDataEx                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PHASE 7: oxide-artifacts embedding                                         │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  build_artifact_blob() → ELF object with .oxart section                    │
+│    • MAGIC "OXIDEART", version 1, payload records, entry records           │
+│    • Payload kinds: Ptx(0x100), NvvmIr(0x110), Ltoir(0x120), Cubin(0x200)  │
+│    • Entry kinds: Kernel(1), DeviceFunction(2)                             │
+│  Object linked into host binary by rustc's linker                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PHASE 8: Host runtime load                                                 │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  cuda-host::load_embedded_module() or cuda-core::load_module_from_image()  │
+│    • Reads .oxart section from host binary (object crate)                  │
+│    • Routes PTX → cuModuleLoadDataEx                                       │
+│    • Routes NVVM IR / LTOIR → libNVVM → nvJitLink → cubin                │
+│    • Typed launch: module.vecadd(&stream, config, &a, &mut b)             │
+│      → scalarizes slices into ptr+len, packs into CUDA kernel params       │
+│      → cuLaunchKernel(@vecadd, grid, block, params...)                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. The MIR Format and How mir-importer Works
+
+### 4.1 What MIR Is (in rustc)
+
+**MIR** (Mid-level IR) is rustc's analysis and optimization IR. It sits between HIR (high-level) and LLVM IR (low-level). Key characteristics:
+
+- **Basic-block CFG:** Functions are control-flow graphs of `BasicBlock`s.
+- **Locals:** Indexed local variables (`_0` = return place, `_1.._N` = args and temporaries).
+- **Statements:** Simple operations (`Assign`, `StorageLive`, `StorageDead`, `Nop`, etc.).
+- **Terminators:** Control flow (`Goto`, `SwitchInt`, `Return`, `Call`, `Assert`, `Unreachable`, `Drop`).
+- **Rvalues:** Expressions (`BinaryOp`, `UnaryOp`, `Cast`, `Ref`, `Use`, `Aggregate`, `Discriminant`, etc.).
+- **Operands:** `Copy` / `Move` of a `Place`, or `Constant`.
+- **Places:** A local + projection chain (`Deref`, `Field`, `Index`, `ConstantIndex`, `Downcast`).
+
+The backend receives MIR **after** all rustc optimization passes have run (`-C opt-level=3` affects device MIR too). One critical flag: `-Z mir-enable-passes=-JumpThreading` is required because JumpThreading duplicates barriers, breaking GPU synchronization.
+
+### 4.2 How mir-importer Parses MIR
+
+**Entry point:** `mir_importer::pipeline::run_pipeline()` calls `translator::body::translate_body()` for each `CollectedFunction`.
+
+**The translator uses rustc's Stable MIR API (`rustc_smir`):**
+```rust
+// From rustc_internal::stable() conversion
+stable_mir::mir::mono::Instance  →  monomorphized function
+stable_mir::mir::Body            →  CFG of basic blocks
+```
+
+**Key rustc APIs consumed:**
+- `tcx.instance_mir(instance.def)` — get optimized MIR body
+- `tcx.collect_and_partition_mono_items()` — get codegen units
+- `tcx.instantiate_and_normalize_erasing_regions()` — resolve generic callees
+- `rustc_internal::stable(instance)` — convert internal Instance to stable Instance
+- `body.locals()` — MIR local declarations
+- `bb.statements` / `bb.terminator` — per-block IR
+
+### 4.3 Translation Strategy: Alloca + Load/Store
+
+Instead of building SSA form directly from MIR (which requires complex PHI placement), mir-importer uses an **alloca-based translation**:
+
+1. **Entry allocas:** For every non-ZST MIR local, emit `MirAllocaOp` in the function entry block.
+2. **Assignments:** `Assign(place, rvalue)` → compute rvalue → `MirStoreOp` into the local's alloca slot.
+3. **Reads:** Every use of a local → `MirLoadOp` from its alloca slot.
+4. **Projections:** `Deref` → load; `Field` → `MirExtractFieldOp` or `MirFieldAddrOp`; `Index` → `MirArrayElementAddrOp`.
+
+This sidesteps SSA construction during translation. `pliron::opts::mem2reg()` promotes the allocas to SSA values later.
+
+### 4.4 Rvalue Translation (`translator::rvalue.rs` — 6026 lines)
+
+**Core function:** `translate_rvalue(rvalue, dest_place) → (Option<op>, result_value, last_inserted_op)`
+
+| Rvalue Variant | dialect-mir Output |
+|----------------|-------------------|
+| `BinaryOp` / `CheckedBinaryOp` | `MirAddOp`, `MirSubOp`, `MirLtOp`, etc. (with auto-cast for mismatched types) |
+| `UnaryOp` (Neg, Not) | `MirNegOp`, `MirNotOp` |
+| `Cast` | `MirCastOp` with `MirCastKindAttr` (16 variants: IntToInt, FloatToFloat, Transmute, etc.) |
+| `Ref` / `AddressOf` | `&local` → return alloca directly; `&(*ptr).field` → `MirFieldAddrOp` chain; fallback → `MirRefOp` |
+| `Aggregate::Adt` | `MirConstructStructOp` or `MirConstructEnumOp` |
+| `Aggregate::Tuple` | `MirConstructTupleOp` |
+| `Aggregate::Array` | `MirConstructArrayOp` |
+| `Aggregate::Closure` | `MirConstructStructOp` of captures |
+| `Discriminant` | `MirGetDiscriminantOp` + optional widening cast |
+| `Use(operand)` | pass-through or load |
+| `PtrMetadata` | slice length extraction |
+| `Repeat` | `MirConstructArrayOp` with N copies |
+
+**Constant translation:**
+- Integers → `MirConstantOp`
+- Floats → `MirFloatConstantOp` (f16/f32/f64)
+- Struct/tuple/enum constants → parsed from allocation bytes
+- ZSTs → empty `MirConstructStructOp` / `MirConstructTupleOp`
+- Statics → `MirGlobalAllocOp` (global addrspace 1) or `MirSharedAllocOp` (shared addrspace 3)
+- Pointers → integer const + `MirCastOp<PointerWithExposedProvenance>`
+
+### 4.5 Terminator Translation (`translator/terminator/mod.rs` — 2953 lines)
+
+**Intrinsic dispatch:** GPU intrinsics arrive as MIR `TerminatorKind::Call` to special symbols. `try_dispatch_intrinsic()` maps each symbol to the corresponding `dialect-nvvm` op.
+
+| Symbol Prefix | Category | SM Target | Example |
+|---------------|----------|-----------|---------|
+| `threadIdx_*` / `blockIdx_*` / `blockDim_*` | Thread position | All | `ReadPtxSregTidXOp` |
+| `index_1d` / `index_2d_*` | Index helpers | All | computed from sregs |
+| `sync_threads` / `threadfence*` | Synchronization | All | `Barrier0Op`, inline PTX |
+| `mbarrier_*` | Mbarrier | sm_90+ | `MbarrierInitSharedOp` |
+| `shuffle_*` / `vote_*` / `match_*` | Warp | All | `ShflSyncBflyI32Op` |
+| `wgmma_*` | WGMMA | sm_90a | `WgmmaFenceOp` |
+| `cp_async_bulk_tensor_*` | TMA | sm_90+ | `CpAsyncBulkTensorG2sTile2dOp` |
+| `tcgen05_*` | TCGen05 | sm_100a | `Tcgen05MmaF16Op` |
+| `cluster_*` | Cluster | sm_90+ | `ClusterSyncOp` |
+| `atomic::*` | Atomics | All | `NvvmAtomicRmwOp` |
+| `clock` / `clock64` / `trap` | Debug | All | `ReadPtxSregClockOp` |
+| `sqrt` / `sin` / `powf` / `fma` | Float math | All | placeholder → libdevice path |
+
+**Call handling:**
+- Closures (`call_once`/`call_mut`/`call`) → unpack tuple args, extract closure body
+- `core::sync::atomic` intrinsics → mapped to `dialect-nvvm` atomic ops
+- Regular calls → `MirCallOp` with callee symbol name
+
+### 4.6 Address-Space Inference (`translator/values.rs`)
+
+`SlotAddrSpaceMap` performs a **fixed-point iteration** (bounded by `num_locals + 2`) over the MIR body:
+
+- **Lattice:** `Uninit → Known(n) → Generic`
+- **Propagation rules:**
+  - Local-to-local copies propagate inferred space
+  - `SharedArray` / `Barrier` constants → `SHARED(3)`
+  - Statics → `GLOBAL(1)` or `CONSTANT(4)`
+  - `SharedArray::index` methods → `SHARED(3)`
+  - `as_ptr` → `GENERIC(0)`
+
+This prevents expensive `addrspacecast` chains in generated LLVM IR.
+
+### 4.7 Pipeline Orchestration (`pipeline.rs`)
+
+```rust
+pub fn run_pipeline(
+    functions: &[CollectedFunction],
+    device_externs: &[DeviceExternDecl],
+    config: &PipelineConfig,
+) -> Result<PipelineOutput, TranslationErr> {
+    // 1. Register dialects
+    dialect_mir::register(ctx);
+    dialect_nvvm::register(ctx);
+
+    // 2. Translate each function body
+    for func in functions {
+        translator::body::translate_body(ctx, module, func)?;
+    }
+
+    // 3. Verify
+    verify_operation(module)?;
+
+    // 4. Promote allocas to SSA
+    mem2reg(module)?;
+
+    // 5. Lower MIR → LLVM dialect
+    mir_lower::lower_mir_to_llvm(ctx, module)?;
+
+    // 6. Export to textual LLVM IR
+    let ll_text = llvm_export::export_module_with_externs(...)?;
+
+    // 7. Generate PTX (or skip for NVVM IR path)
+    if !has_libdevice_calls {
+        pipeline::generate_ptx(&ll_text, ...)?;
+    }
+}
+```
+
+---
+
+## 5. Pliron IR System and Dialects
+
+### 5.1 What Is Pliron?
+
+[Pliron](https://github.com/pliron-org/pliron) is an MLIR-like IR framework written in Rust. It provides:
+- **Operations:** Typed IR nodes with operands, results, attributes, regions, and successors.
+- **Types & Attributes:** Extensible type system with registration and deduplication.
+- **Regions & Blocks:** Hierarchical control flow (operations contain regions; regions contain blocks; blocks contain operations).
+- **Block Arguments:** MLIR-style block arguments (not PHI nodes — those are generated at LLVM export time).
+- **Interfaces:** Rust trait-based op/type interfaces for generic dispatch.
+- **Dialects:** Namespaces of ops and types.
+- **DialectConversion:** Framework for rewriting ops from one dialect to another.
+- **Passes:** Built-in passes like `mem2reg` (SSA promotion).
+
+### 5.2 dialect-mir — 54 Operations
+
+**Type system (8 types):**
+
+| Type | Name | Purpose |
+|------|------|---------|
+| `MirFP16Type` | `mir.fp16` | IEEE-754 binary16 |
+| `MirTupleType` | `mir.tuple` | Heterogeneous product type |
+| `MirPtrType` | `mir.ptr` | Typed pointer with mutability + address space |
+| `MirSliceType` | `mir.slice` | Fat pointer `{ptr, len}` |
+| `MirDisjointSliceType` | `mir.disjoint_slice` | Thread-local-access slice |
+| `MirStructType` | `mir.struct` | Named struct with exact rustc layout |
+| `MirArrayType` | `mir.array` | Fixed-size array `[T; N]` |
+| `MirEnumType` | `mir.enum` | Discriminated union with variant info |
+
+**Address space constants:** `GENERIC=0`, `GLOBAL=1`, `SHARED=3`, `CONSTANT=4`, `LOCAL=5`, `TMEM=6`.
+
+**Op categories:**
+
+| Category | Ops | Count |
+|----------|-----|-------|
+| Function | `mir.func` | 1 |
+| Control Flow | `mir.return`, `mir.goto`, `mir.cond_br`, `mir.assert`, `mir.unreachable` | 5 |
+| Memory | `mir.alloca`, `mir.assign`, `mir.store`, `mir.load`, `mir.ref`, `mir.ptr_offset`, `mir.shared_alloc`, `mir.global_alloc`, `mir.extern_shared` | 9 |
+| Constants | `mir.constant`, `mir.float_constant`, `mir.undef` | 3 |
+| Arithmetic | `mir.add`, `mir.sub`, `mir.mul`, `mir.div`, `mir.rem`, `mir.neg`, `mir.not`, `mir.shl`, `mir.shr`, `mir.bitand`, `mir.bitor`, `mir.bitxor`, `mir.checked_add`, `mir.checked_mul`, `mir.checked_sub` | 15 |
+| Comparison | `mir.lt`, `mir.le`, `mir.gt`, `mir.ge`, `mir.eq`, `mir.ne` | 6 |
+| Aggregate | `mir.extract_field`, `mir.insert_field`, `mir.construct_struct`, `mir.construct_tuple`, `mir.construct_array`, `mir.extract_array_element`, `mir.field_addr`, `mir.array_element_addr` | 8 |
+| Enum | `mir.construct_enum`, `mir.get_discriminant`, `mir.enum_payload` | 3 |
+| Cast | `mir.cast` | 1 |
+| Storage | `mir.storage_live`, `mir.storage_dead` | 2 |
+| Call | `mir.call` | 1 |
+
+**Key attributes:**
+- `MirCastKindAttr` — 16 variants preserving Rust cast semantics
+- `MutabilityAttr` — `&mut` vs `&`
+- `FieldIndexAttr` / `VariantIndexAttr`
+- `NicheEncodingAttr` — for reconstructing niche-encoded enums (e.g., `Option<NonZeroU32>`)
+
+### 5.3 dialect-nvvm — ~119 Operations
+
+**No custom types** — reuses Pliron built-in `IntegerType`, `FloatType`, and `PointerType`.
+
+**Custom attributes (atomic only):**
+- `AtomicOrdering` — `Relaxed`, `Acquire`, `Release`, `AcqRel`, `SeqCst`
+- `AtomicScope` — `Device`, `Block`, `System`
+- `AtomicRmwKind` — `Add`, `Sub`, `And`, `Or`, `Xor`, `Xchg`, `Min`, `Max`, `UMin`, `UMax`, `FAdd`
+
+**Op categories and counts:**
+
+| Category | Count | Arch | Lowering |
+|----------|-------|------|----------|
+| Thread/block/grid sregs | 20 | All | LLVM intrinsics |
+| Warp | 17 | All (match: sm_70+) | LLVM intrinsics |
+| Atomic | 4 | sm_70+ | LLVM `atomicrmw`/`cmpxchg` |
+| Cluster | 10 | sm_90+ | PTX sregs + inline PTX |
+| Mbarrier | 9 | sm_90+ | LLVM intrinsics + inline PTX |
+| TMA | 13 | sm_90+ | LLVM intrinsics + inline PTX |
+| WGMMA | 5 | sm_90a | LLVM intrinsics + inline PTX |
+| TCGen05 | 22 | sm_100+ | Inline PTX only |
+| Stmatrix | 5 | sm_90+ | Inline PTX |
+| CLC | 6 | sm_90+ | Inline PTX |
+| Debug/profiling | 7 | All | LLVM intrinsics / PTX |
+| Grid sync | 1 | All (coop) | Inline PTX sequence |
+
+---
+
+## 6. mir-lower — MIR to LLVM Dialect
+
+### 6.1 Entry Point
+
+```rust
+pub fn lower_mir_to_llvm(ctx: &mut Context, module_op: Ptr<Operation>) -> Result<()> {
+    let mut conversion = MirToLlvmConversionDriver {
+        shared_globals: HashMap::new(),
+        device_globals: HashMap::new(),
+        dynamic_smem_alignments: HashMap::new(),
+    };
+    apply_dialect_conversion(ctx, &mut conversion, module_op)?;
+    Ok(())
+}
+```
+
+### 6.2 DialectConversion Framework
+
+Pliron's `DialectConversion` trait is implemented by `MirToLlvmConversionDriver`:
+
+| Method | Purpose |
+|--------|---------|
+| `can_convert_op` | True for ops in `"mir"` or `"nvvm"` dialect |
+| `can_convert_type` | True for signed/unsigned integers and `MirConvertibleType`s |
+| `convert_type` | Delegates to `convert::types::convert_type()` via `MirTypeConversion` interface |
+| `rewrite` | Per-op dispatcher |
+
+### 6.3 Op Dispatch Strategy
+
+Four ops are **special-cased** because they need pass-level mutable state:
+- `MirFuncOp` → `lowering::convert_func(..., &mut shared_globals, &mut dynamic_smem_alignments)`
+- `MirSharedAllocOp` → `convert::ops::memory::convert_shared_alloc_dc(..., &mut shared_globals)`
+- `MirGlobalAllocOp` → `convert::ops::memory::convert_global_alloc_dc(..., &mut device_globals)`
+- `MirExternSharedOp` → `convert::ops::memory::convert_extern_shared_dc(..., &mut shared_globals, &mut dynamic_smem_alignments)`
+
+All other ops dispatch via `op_cast::<dyn MirToLlvmConversionInterface>()` — an O(1) vtable lookup. The trait is defined in `src/conversion_interface.rs`:
+
+```rust
+#[op_interface]
+pub trait MirToLlvmConversion {
+    fn convert(&self, ctx: &mut Context, rewriter: &mut DialectConversionRewriter,
+               operands_info: &OperandsInfo) -> Result<()>;
+}
+```
+
+Every MIR/NVVM op implements this in `src/convert/interface_impls.rs` (2955 lines).
+
+### 6.4 Type Conversion
+
+| MIR Type | LLVM Type | Notes |
+|----------|-----------|-------|
+| Signed/Unsigned Integer | Signless `IntegerType` | Width preserved; signedness stripped |
+| `MirFP16Type` | `HalfType` | |
+| `FP32` / `FP64` | Same | Pass-through |
+| `MirPtrType` | `PointerType` | Address space preserved |
+| `MirSliceType` / `MirDisjointSliceType` | `StructType { ptr, i64 }` | Fat pointer |
+| `MirTupleType` | `StructType` | Empty → empty struct |
+| `MirStructType` | `StructType` | With explicit padding matching rustc layout |
+| `MirEnumType` | `StructType { discr, fields... }` | Discriminant + all variant fields |
+| `MirArrayType` | `ArrayType` | |
+
+**Struct padding:** `build_struct_with_explicit_padding()` inserts `[N x i8]` padding arrays between fields to match rustc's exact byte offsets, ensuring host/device ABI compatibility.
+
+### 6.5 Function Lowering
+
+**ABI flattening:**
+- **Slices** → `(ptr, i64)` at all boundaries
+- **Structs** → flattened individual fields at internal device-function boundaries; single byval struct at kernel boundaries
+- **ZST fields** → stripped (NVPTX rejects empty parameter types)
+
+**Entry prologue:** The LLVM entry block receives flattened arguments. The prologue reconstructs aggregates before branching to the original MIR entry block:
+- `ReconstructKind::Slice` → `undef → insertvalue[0] ptr → insertvalue[1] len`
+- `ReconstructKind::Struct(n)` → `undef → insertvalue field0[0] → ...`
+
+### 6.6 GPU Intrinsic Lowering
+
+**Strategy A: LLVM NVVM Intrinsic Calls**
+```rust
+let func_ty = llvm_types::FuncType::get(ctx, ret_ty, arg_tys, false);
+helpers::ensure_intrinsic_declared(ctx, block, "llvm_nvvm_...", func_ty)?;
+let call = llvm::CallOp::new(ctx, Direct(sym_name), func_ty, args);
+```
+Used for: thread IDs, barriers, warp shuffle/vote, mbarrier init/arrive, TMA G2S/S2G.
+
+**Strategy B: Inline PTX Assembly (`llvm.inlineasm`)**
+```rust
+let asm = llvm::InlineAsmOp::new_convergent(ctx, ret_ty, inputs, asm_template, constraints);
+```
+Critical: warp-synchronous ops **must** use `new_convergent` to prevent LLVM from hoisting/deduplicating across divergent control flow.
+
+Used for: `threadfence*`, `cluster.sync`, `wgmma.*`, `tcgen05.*`, `stmatrix.*`, `mbarrier.arrive.expect_tx`, `mbarrier.test_wait`.
+
+**WGMMA MMA:** Not yet implemented. `convert_mma` returns an explicit error because full lowering requires register allocation for 16+ output registers.
+
+**TCGen05:** All ops use inline PTX only because LLVM 20/21 declares tcgen05 intrinsics but does **not** lower them properly (emits `.extern .func` instead of PTX).
+
+---
+
+## 7. llvm-export — Textual LLVM IR Emission
+
+### 7.1 Entry Point
+
+```rust
+pub fn export_module_with_externs<T: AsDeviceExtern>(
+    ctx: &Context,
+    module: &ModuleOp,
+    device_externs: &[T],
+    config: &dyn ExportBackendConfig,
+) -> Result<String, String>
+```
+
+### 7.2 Export Structure
+
+```llvm
+; ModuleID = '...'
+source_filename = "..."
+target datalayout = "..."
+target triple = "nvptx64-nvidia-cuda"
+
+; Device extern declarations
+declare <ret> @name(<params>)
+
+; Globals and function definitions
+@global = ...
+define ptx_kernel void @kernel(...) { ... }
+declare ...
+
+; @llvm.used (if NVVM config)
+@llvm.used = appending global [N x ptr] [ptr @...], section "llvm.metadata"
+
+; Attribute groups
+attributes #0 = { convergent }
+
+; !nvvm.annotations
+!0 = !{ptr @kernel, !"kernel", i32 1}
+!nvvm.annotations = !{!0}
+
+; !nvvmir.version (if NVVM config)
+!nvvmir.version = !{!M}
+```
+
+### 7.3 PtxExportConfig vs NvvmExportConfig
+
+| Setting | `PtxExportConfig` | `NvvmExportConfig` |
+|---------|-------------------|--------------------|
+| `datalayout()` | Minimal | Full NVPTX |
+| `emit_llvm_used()` | `false` | `true` |
+| `emit_nvvmir_version()` | `false` | `true` |
+| `nvvmir_version()` | unused | `[2, 0, 3, 2]` |
+| `emit_all_kernel_annotations()` | `false` | `true` |
+| `emit_ptx_kernel_keyword()` | `true` | `false` |
+
+PTX mode targets `llc` directly. NVVM mode targets `libNVVM` / `nvvmCompileProgram`.
+
+### 7.4 PHI-Node Bridge
+
+Pliron uses block arguments; LLVM IR uses PHI nodes. The exporter builds a `PredecessorMap`:
+- `BrOp` → single successor, all operands become arguments
+- `CondBrOp` → splits operands into `[cond, true_args..., false_args...]` based on destination block arg counts
+
+PHI nodes are emitted at the start of each non-entry block that has arguments:
+```llvm
+bb0:
+  %v5 = phi i32 [ %v3, %entry ], [ %v7, %bb1 ]
+```
+
+### 7.5 SSA Value Naming (Deterministic)
+
+A pre-pass assigns stable names:
+1. Entry block args → `%v0`, `%v1`, ... (function params)
+2. Non-entry block args → `%vN` (PHI results)
+3. Operation results → `%vN` in block iteration order
+4. `ConstantOp` results → literal constant (e.g., `42`)
+5. `AddressOfOp` results → `@global_name`
+6. `UndefOp` results → `undef`
+
+### 7.6 Metadata Emission
+
+**`!nvvm.annotations`:**
+- Basic kernel: `!{ptr @kernel, !"kernel", i32 1}`
+- Cluster config: `!{..., !"cluster_dim_x", i32 2, ...}`
+- Launch bounds: `!{..., !"maxntidx", i32 256, !"minctasm", i32 2}`
+
+**`@llvm.used`:** Preserves kernels and standalone device functions from DCE. Only emitted in NVVM mode.
+
+---
+
+## 8. PTX Generation from LLVM IR
+
+### 8.1 llc Path (Standard)
+
+```bash
+llc -march=nvptx64 -mcpu=sm_NNN input.ll -o output.ptx
+```
+
+**Target auto-detection:** The pipeline scans the `.ll` file for feature markers:
+
+| Feature Marker | Target | GPU Family |
+|----------------|--------|------------|
+| `tcgen05.*` / TMA multicast | `sm_100a` | Blackwell datacenter |
+| `wgmma.fence.*` | `sm_90a` | Hopper only |
+| `cp.async.bulk.tensor.*` | `sm_100` | Hopper+ compatible |
+| `cluster_ctaid` / `cluster.sync` | `sm_90` | Hopper+ compatible |
+| (none) | `sm_80` | Ampere+ |
+
+Override: `CUDA_OXIDE_TARGET=<sm_NNN>`.
+
+### 8.2 NVVM IR / libdevice Path (Math Intrinsics)
+
+When kernels call `__nv_*` math functions (e.g., `__nv_sinf`), the pipeline:
+1. Skips `llc` (PTX would have unresolved externals)
+2. Emits NVVM IR config from `llvm-export`
+3. Host-side `cuda-host::ltoir` compiles `.ll` → LTOIR via `libNVVM` with `libdevice.10.bc` linked
+4. `nvJitLink` links LTOIR modules → final cubin/PTX
+5. Loaded by CUDA driver
+
+**Discovery:** `CUDA_OXIDE_LIBDEVICE`, `CUDA_HOME`/`CUDA_PATH`, `CUDA_OXIDE_TARGET` (default `sm_120` for LTOIR).
+
+---
+
+## 9. The NVVM Dialect and NVPTX Backend
+
+### 9.1 NVVM Dialect = LLVM Dialect + NVIDIA Intrinsics
+
+The `dialect-nvvm` crate does not model LLVM IR directly. Instead, it models GPU-specific operations that lower into one of two forms:
+
+1. **LLVM intrinsic calls:** `@llvm.nvvm.read.ptx.sreg.tid.x`, `@llvm.nvvm.barrier0`, `@llvm.nvvm.shfl.sync.bfly.i32`, etc.
+2. **Inline PTX assembly:** `call void asm sideeffect "bar.sync 0", ""() #0`
+
+### 9.2 NVPTX Backend
+
+The NVPTX backend is LLVM's target for NVIDIA GPUs. Key behaviors:
+- Recognizes `ptx_kernel` calling convention → emits `.entry` instead of `.func`
+- Recognizes `@llvm.nvvm.*` intrinsics → emits corresponding PTX instructions
+- Does **NOT** support all Hopper/Blackwell instructions natively — hence inline PTX for `tcgen05.*`, `wgmma.mma_async`, `stmatrix.*`, etc.
+- Address spaces are preserved: `addrspace(1)` → `.global`, `addrspace(3)` → `.shared`
+
+### 9.3 Convergent Attribute
+
+Critical for correctness: any warp-collective operation (barriers, shuffles, votes, TMA, WGMMA) must have the `convergent` attribute. This prevents LLVM from hoisting or duplicating the instruction across divergent branches. The exporter automatically adds `#0 = { convergent }` to declarations/calls matching `llvm.nvvm.barrier*`, `llvm.nvvm.shfl*`, `llvm.nvvm.vote*`, `llvm.nvvm.cp.async.bulk*`.
+
+---
+
+## 10. rustc-codegen-cuda — Codegen Backend
+
+### 10.1 Registration
+
+```rust
+#[unsafe(no_mangle)]
+pub fn __rustc_codegen_backend() -> Box<dyn CodegenBackend> {
+    Box::new(CudaCodegenBackend {
+        config: CudaCodegenConfig::from_env(),
+        llvm_backend: rustc_codegen_llvm::LlvmCodegenBackend::new(),
+    })
+}
+```
+
+rustc loads this via `-Z codegen-backend=path/to/librustc_codegen_cuda.so`.
+
+### 10.2 Backend Delegation
+
+The backend wraps `rustc_codegen_llvm` and delegates almost everything to it, except:
+- `codegen_crate()` — intercepts to extract device code
+- `join_codegen()` — injects artifact objects into host compilation
+
+### 10.3 Host vs Device Split
+
+```
+codegen_crate(tcx, crate_info)
+    ├── IF has_device_code:
+    │   ├── collector::collect_device_functions()  → Vec<CollectedFunction>
+    │   ├── device_codegen::generate_device_code() → DeviceCodegenResult
+    │   └── write_device_artifact_object()         → .embed.o file
+    └── llvm_backend.codegen_crate(tcx, crate_info)  → ALL host code
+
+join_codegen(ongoing, sess, outputs)
+    ├── llvm_backend.join_codegen()                → CompiledModules
+    └── Append artifact objects as additional modules
+```
+
+### 10.4 Kernel Detection
+
+Kernels are detected by **name mangling convention**, not attribute metadata:
+- `#[kernel]` macro renames to `cuda_oxide_kernel_246e25db_<name>`
+- `is_kernel_symbol()` checks the prefix
+- Generic kernels: `name_TID_<hex32>` where hex is `type_id_u128` of type tuple
+
+### 10.5 Collector BFS Algorithm
+
+```rust
+while let Some(func) = worklist.pop_front() {
+    let mir = tcx.instance_mir(func.instance.def);  // OPTIMIZED MIR
+    for bb in mir.basic_blocks {
+        if let Call { func, .. } = terminator {
+            process_call_operand(func, caller_instance);
+        }
+    }
+    result.push(func);
+}
+```
+
+**Collect decisions:**
+- `Collect` — local crate, `core`, `alloc`, `cuda_device`, any `no_std` crate
+- `SkipIntentional` — `core::fmt::*`, `core::panicking::*`, `precondition_check`
+- `Forbidden` — `std::*` (hard error, except whitelisted cmath shims)
+
+### 10.6 Stable MIR Bridge
+
+```rust
+rustc_internal::run(tcx, || {
+    let stable_functions: Vec<mir_importer::CollectedFunction> = functions
+        .iter()
+        .map(|func| mir_importer::CollectedFunction {
+            instance: rustc_internal::stable(func.instance),
+            is_kernel: func.is_kernel,
+            export_name: func.export_name.clone(),
+        })
+        .collect();
+    mir_importer::run_pipeline(&stable_functions, &stable_device_externs, &pipeline_config)
+});
+```
+
+The bridge converts `rustc_middle::ty::Instance` → `stable_mir::mir::mono::Instance` because `mir-importer` is a workspace crate that cannot depend on `rustc_private` APIs directly.
+
+---
+
+## 11. Runtime Architecture
+
+### 11.1 cuda-core — Synchronous Host Runtime
+
+| Type | Wraps | Purpose |
+|------|-------|---------|
+| `CudaContext` | `CUcontext` | Primary context management, auto-release on Drop |
+| `CudaStream` | `CUstream` | Non-blocking streams, fork/join, event recording |
+| `DeviceBuffer<T>` | `CUdeviceptr` | Owning device allocation, H2D/D2H/D2D transfers |
+| `PinnedHostBuffer<T>` | `cuMemAllocHost` | Page-locked host memory for async transfers |
+| `CudaModule` | `CUmodule` | PTX/cubin/fatbin loading |
+| `CudaEvent` | `CUevent` | Timing and cross-stream synchronization |
+| `PhysicalAllocation` / `VirtualReservation` / `Mapping` | VMM APIs | Virtual memory management |
+
+### 11.2 cuda-host — Typed Launch Layer
+
+- `#[cuda_module] mod kernels { ... }` generates:
+  - `kernels::load(&ctx) -> Result<Module, ...>`
+  - `module.vecadd(&stream, config, a, b) -> Result<(), ...>`
+- Slices are scalarized into `(ptr, len)` pairs at launch time
+- Generic kernels use `type_id_u128::<(T0, T1, ...)>()` for naming (backend computes same hash)
+
+**LTOIR pipeline:**
+```
+.ll file → libnvvm-sys::compile → LTOIR
+LTOIR + libdevice.10.bc → nvjitlink-sys::link → cubin
+```
+
+### 11.3 cuda-async — Composable Async
+
+| Type | Purpose |
+|------|---------|
+| `DeviceOperation<R>` | Opaque lazy GPU computation |
+| `DeviceFuture<T>` | `std::future::Future` bridging CUDA stream callbacks |
+| `DeviceBox<T>` | GPU-resident value, frees via `cuMemFreeAsync` on deallocator stream |
+| `StreamPoolRoundRobin` | Scheduling policy distributing work across stream pool |
+
+Execution flow:
+```
+DeviceOperation (lazy)
+    → .schedule(policy) → DeviceFuture
+        → first poll → execute on stream + cuLaunchHostFunc(callback → AtomicWaker)
+            → subsequent polls → check AtomicBool → return result
+```
+
+### 11.4 cuda-device — Device Intrinsics
+
+Every function is an `unreachable!()` stub with `#[inline(never)]`. The backend recognizes these by symbol name and lowers them to PTX/LLVM intrinsics. Key modules:
+
+| Module | Key Abstractions |
+|--------|-----------------|
+| `thread` | `ThreadIndex<'kernel, IS>`, `index_1d()`, hardware builtins |
+| `disjoint` | `DisjointSlice` — type-safe parallel writes |
+| `atomic` | `DeviceAtomic*`, `BlockAtomic*`, `SystemAtomic*` |
+| `shared` | `SharedArray<T, N, ALIGN>`, `DynamicSharedArray<T, ALIGN>` |
+| `barrier` | `ManagedBarrier<State, Kind, ID>` — typestate-managed |
+| `tma` | `TmaDescriptor`, bulk tensor copy |
+| `wgmma` | WGMMA fence, commit, wait, MMA |
+| `tcgen05` | `TmemGuard`, MMA variants, stmatrix, cvt |
+| `cooperative_groups` | `Grid`, `Cluster`, `WarpTile`, reduce/scan |
+
+---
+
+## 12. Current Gaps for Flux→PTX Integration
+
+### 12.1 No Flux Frontend Exists
+
+The pipeline currently has **one frontend**: `mir-importer`, which consumes rustc Stable MIR. There is no crate that consumes Flux bytecode or any other alternative IR.
+
+### 12.2 mir-importer Is Tightly Coupled to rustc MIR
+
+`mir-importer` makes deep assumptions about the input format:
+- Uses `rustc_internal::stable()` to convert `Instance<'tcx>` → stable MIR
+- Reads `mir::Local`, `BasicBlock`, `TerminatorKind`, `Rvalue`, `Place`, `Operand`
+- Performs address-space inference by scanning rustc MIR body
+- Extracts layout info via `layout()` for struct/enum types
+- Reads const allocation bytes for static initializers
+
+**A Flux frontend would need to reconstruct all of this information from Flux bytecode.**
+
+### 12.3 Type System Gap
+
+Flux bytecode would need to map to the full `dialect-mir` type system:
+- `MirStructType` with exact byte offsets and field layouts
+- `MirEnumType` with discriminant types and variant field counts
+- `MirSliceType` (fat pointer semantics)
+- `MirPtrType` with CUDA address spaces
+- Niche-encoded enums (`Option<NonZeroU32>`)
+
+Without rustc's `layout()` API, the Flux compiler must compute its own layouts or embed them in bytecode.
+
+### 12.4 Intrinsic Recognition Gap
+
+`mir-importer` recognizes GPU intrinsics by **Rust symbol name** (e.g., `cuda_device::thread::thread_idx_x`). A Flux frontend would need its own mapping from Flux opcodes → `dialect-nvvm` ops.
+
+### 12.5 Generic Monomorphization Gap
+
+rustc handles generic monomorphization before MIR is emitted. Flux would need its own monomorphization pass, or restrict generics to a pre-specialized form.
+
+### 12.6 No Runtime Compilation API
+
+There is no public API for "compile this IR blob at runtime." The pipeline is designed around:
+1. rustc backend invocation at compile time
+2. PTX/LTOIR embedded into host binary
+3. Runtime loading of precompiled artifacts
+
+For Flux→PTX, we need a **runtime compiler API** that can take Flux bytecode (or synthetic MIR) and produce PTX without rustc involvement.
+
+### 12.7 Missing Crates
+
+Per `FLUX_TO_PTX.md`, the following crates do not yet exist:
+- `flux-importer` — Flux bytecode → synthetic MIR / Pliron IR
+- `oxide-constructs` — git-native construct loading
+- `oxide-crdt` — GPU-aware CRDT types
+- `oxide-fleet` — Fleet coordination
+- `oxide-flux-runtime` — Top-level runtime
+- `cudaclaw-bridge` — Bridge to cudaclaw execution
+
+---
+
+## 13. What flux-importer Needs to Hook Into
+
+### 13.1 Hook Point 1: Pliron Context + Dialect Registration
+
+`flux-importer` must create a Pliron `Context` and register the same dialects:
+```rust
+let mut ctx = Context::new();
+dialect_mir::register(&mut ctx);
+dialect_nvvm::register(&mut ctx);
+pliron_llvm::register(&mut ctx);
+```
+
+### 13.2 Hook Point 2: dialect-mir Module Construction
+
+Instead of calling `translator::body::translate_body()`, `flux-importer` would construct `dialect-mir` ops directly:
+```rust
+// Build a function
+let func_op = MirFuncOp::new(&mut ctx, symbol_name, func_type, visibility);
+// Build blocks, ops, etc.
+MirAllocaOp::new(...);
+MirAddOp::new(...);
+MirStoreOp::new(...);
+// ...
+```
+
+The **target interface** is the `dialect-mir` op API (54 ops, 8 types, 6 attributes).
+
+### 13.3 Hook Point 3: Pipeline Post-Translation
+
+After building the `dialect-mir` module, `flux-importer` can reuse the existing pipeline:
+```rust
+// 1. Verify
+verify_operation(module)?;
+
+// 2. Promote allocas to SSA
+mem2reg(module)?;
+
+// 3. Lower to LLVM dialect
+mir_lower::lower_mir_to_llvm(&mut ctx, module)?;
+
+// 4. Export to LLVM IR
+let ll_text = llvm_export::export_module_with_externs(
+    &ctx, &module_op, &device_externs, &PtxExportConfig
+)?;
+
+// 5. Compile to PTX
+pipeline::generate_ptx(&ll_text, ...)?;
+```
+
+**This is the critical reuse point.** Everything from Phase 2 (verify) through Phase 6 (PTX generation) can be shared.
+
+### 13.4 Hook Point 4: Runtime Loading
+
+The output PTX can be fed into `cuda-core` or `cuda-host` directly:
+```rust
+let module = cuda_core::load_module_from_ptx_src(&ctx, ptx_bytes)?;
+let func = module.get_function("flux_kernel_main")?;
+cuda_core::launch_kernel_on_stream(&stream, &func, &config, &args)?;
+```
+
+No `oxide-artifacts` embedding needed for a JIT runtime.
+
+### 13.5 Hook Point 5: LTOIR / libdevice Path
+
+If Flux kernels call math functions, `flux-importer` should emit NVVM IR config and use `cuda-host::ltoir`:
+```rust
+let ll_text = llvm_export::export_module_with_externs(
+    &ctx, &module_op, &device_externs, &NvvmExportConfig
+)?;
+let cubin = cuda_host::ltoir::build_cubin_from_nvvm_ir(&ll_text, "sm_90")?;
+```
+
+### 13.6 Required flux-importer Architecture
+
+```
+Flux Bytecode
+    │
+    ▼
+┌─────────────────────────────────────────┐
+│ flux-parser                             │
+│   Parse Flux bytecode → AST/SSA form    │
+└─────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────┐
+│ flux-typecheck                          │
+│   Type inference / validation           │
+│   Compute layouts for structs/enums     │
+└─────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────┐
+│ flux-to-mir (or flux-to-pliron)         │
+│   Map Flux types → dialect-mir types    │
+│   Map Flux ops → dialect-mir ops        │
+│   Map Flux GPU builtins → dialect-nvvm  │
+│   Emit MirFuncOp, blocks, allocas       │
+└─────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────┐
+│ cuda-oxide pipeline (reused)            │
+│   verify → mem2reg → mir-lower          │
+│   → llvm-export → llc → PTX             │
+└─────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────┐
+│ Runtime (cuda-core / cuda-host)         │
+│   cuModuleLoadDataEx → launch           │
+└─────────────────────────────────────────┘
+```
+
+### 13.7 Critical API Surface for flux-importer
+
+| Crate | API | Purpose |
+|-------|-----|---------|
+| `dialect-mir` | `MirFuncOp::new()`, all ops in `ops/` | Build MIR IR |
+| `dialect-mir` | `MirPtrType::get_shared()`, `MirSliceType::get()` | Build types |
+| `dialect-nvvm` | `ReadPtxSregTidXOp::new()`, etc. | Emit GPU intrinsics |
+| `pliron` | `Context::new()`, `verify_operation()`, `mem2reg()` | IR context and passes |
+| `mir-lower` | `lower_mir_to_llvm()` | Lower to LLVM dialect |
+| `llvm-export` | `export_module_with_externs()` | Emit textual LLVM IR |
+| `cuda-core` | `load_module_from_ptx_src()`, `launch_kernel()` | Runtime load |
+| `cuda-host` | `ltoir::build_cubin_from_ll()` | LTOIR fallback |
+
+---
+
+## 14. Key Data Structures and APIs at Each Stage
+
+### Stage 0: rustc MIR Extraction
+
+```rust
+// rustc middle
+struct Instance<'tcx> {
+    def: InstanceDef<'tcx>,
+    args: GenericArgsRef<'tcx>,
+}
+
+// stable_mir bridge
+struct CollectedFunction {
+    instance: stable_mir::mir::mono::Instance,
+    is_kernel: bool,
+    export_name: String,
+}
+
+// collector
+struct CollectionResult<'tcx> {
+    functions: Vec<CollectedFunction<'tcx>>,
+    device_externs: Vec<DeviceExternDecl>,
+}
+```
+
+### Stage 1: mir-importer (dialect-mir construction)
+
+```rust
+// Core translation state
+type ValueMap = HashMap<mir::Local, Value>;  // local → alloca slot pointer
+
+struct SlotAddrSpaceMap {
+    slots: Vec<AddressSpace>,  // per-local inference result
+}
+
+// Translation errors
+enum TranslationErr {
+    Unsupported(String),
+    TypeError(String),
+    InvalidOp(String),
+}
+
+// Pipeline config
+struct PipelineConfig {
+    output_dir: PathBuf,
+    show_ir: bool,
+    emit_nvvm_ir: bool,
+}
+```
+
+### Stage 2: Verification + mem2reg
+
+```rust
+// Pliron built-in
+fn verify_operation(op: Ptr<Operation>) -> Result<(), Error>;
+fn mem2reg(op: Ptr<Operation>) -> Result<(), Error>;
+
+// Key interfaces
+trait PromotableAllocationInterface {
+    fn alloc_info(&self, ctx: &Context) -> AllocInfo;
+    fn default_value(&self, ctx: &mut Context, loc: Location) -> Value;
+    fn promote(&self, ctx: &mut Context, rewriter: &mut Rewriter);
+}
+
+trait PromotableOpInterface {
+    fn promotion_kind(&self, ctx: &Context, alloca: Value) -> PromotionKind;
+    fn promote(&self, ctx: &mut Context, rewriter: &mut Rewriter, reaching_def: Value);
+}
+```
+
+### Stage 3: mir-lower (LLVM dialect)
+
+```rust
+// Entry point
+pub fn lower_mir_to_llvm(ctx: &mut Context, module_op: Ptr<Operation>) -> Result<()>;
+
+// Driver state
+struct MirToLlvmConversionDriver {
+    shared_globals: SharedGlobalsMap,        // alloc_key → llvm.global
+    device_globals: DeviceGlobalsMap,        // global_key → llvm.global
+    dynamic_smem_alignments: DynamicSmemAlignmentMap,  // func → max_align
+}
+
+// Conversion interface (per-op)
+#[op_interface]
+pub trait MirToLlvmConversion {
+    fn convert(&self, ctx: &mut Context, rewriter: &mut DialectConversionRewriter,
+               operands_info: &OperandsInfo) -> Result<()>;
+}
+
+// Type conversion
+#[type_interface]
+pub trait MirTypeConversion {
+    fn converter(&self) -> ConvertMirTypeFn;
+}
+type ConvertMirTypeFn = fn(Ptr<TypeObj>, &mut Context) -> anyhow::Result<Ptr<TypeObj>>;
+```
+
+### Stage 4: llvm-export (textual LLVM IR)
+
+```rust
+// Entry point
+pub fn export_module_with_externs<T: AsDeviceExtern>(
+    ctx: &Context,
+    module: &ModuleOp,
+    device_externs: &[T],
+    config: &dyn ExportBackendConfig,
+) -> Result<String, String>;
+
+// Config trait
+pub trait ExportBackendConfig {
+    fn datalayout(&self) -> &'static str;
+    fn target_triple(&self) -> &'static str;
+    fn emit_llvm_used(&self) -> bool;
+    fn emit_nvvmir_version(&self) -> bool;
+    fn nvvmir_version(&self) -> [u32; 4];
+    fn emit_all_kernel_annotations(&self) -> bool;
+    fn emit_ptx_kernel_keyword(&self) -> bool;
+}
+
+// Device extern decl
+pub struct DeviceExternDecl {
+    pub export_name: String,
+    pub param_types: Vec<String>,   // "i32", "ptr", "float"
+    pub return_type: String,
+    pub attrs: DeviceExternAttrs,
+}
+```
+
+### Stage 5: PTX Generation
+
+```rust
+// Target detection
+fn detect_target_from_ir(ll_text: &str) -> &'static str {
+    if ll_text.contains("tcgen05") { "sm_100a" }
+    else if ll_text.contains("wgmma.fence") { "sm_90a" }
+    else if ll_text.contains("cp.async.bulk.tensor") { "sm_100" }
+    else if ll_text.contains("cluster.sync") { "sm_90" }
+    else { "sm_80" }
+}
+
+// llc invocation
+Command::new("llc")
+    .args(&["-march=nvptx64", "-mcpu=sm_NNN", "-o", "output.ptx", "input.ll"])
+```
+
+### Stage 6: Runtime Loading
+
+```rust
+// cuda-core
+pub fn load_module_from_ptx_src(ctx: &CudaContext, ptx: &[u8]) -> Result<CudaModule, DriverError>;
+pub fn launch_kernel_on_stream(
+    stream: &CudaStream,
+    func: &CudaFunction,
+    config: &LaunchConfig,
+    args: &[*mut c_void],
+) -> Result<(), DriverError>;
+
+// cuda-host LTOIR
+pub fn build_cubin_from_ll(ll_text: &str, target: &str) -> Result<Vec<u8>, LtoirError>;
+pub fn build_cubin_from_nvvm_ir(nvvm_ir: &str, target: &str) -> Result<Vec<u8>, LtoirError>;
+```
+
+---
+
+## Appendix: Crate Inventory
+
+| # | Crate | Version | Workspace | Description |
+|---|-------|---------|-----------|-------------|
+| 1 | `cargo-oxide` | 0.2.0 | Yes | Build orchestration subcommand |
+| 2 | `rustc-codegen-cuda` | 0.2.0 | **No** | rustc codegen backend |
+| 3 | `mir-importer` | 0.2.0 | Yes | MIR → Pliron translator |
+| 4 | `mir-lower` | 0.2.0 | Yes | MIR → LLVM dialect lowering |
+| 5 | `dialect-mir` | 0.2.0 | Yes | Rust MIR Pliron dialect |
+| 6 | `dialect-nvvm` | 0.2.0 | Yes | NVIDIA GPU intrinsic dialect |
+| 7 | `llvm-export` | 0.2.0 | Yes | LLVM dialect → textual IR |
+| 8 | `cuda-device` | 0.2.0 | Yes | `#![no_std]` device stubs |
+| 9 | `cuda-host` | 0.2.0 | Yes | Typed launch + LTOIR |
+| 10 | `cuda-core` | 0.2.0 | Yes | Safe CUDA driver wrappers |
+| 11 | `cuda-async` | 0.2.0 | Yes | Lazy async GPU operations |
+| 12 | `cuda-macros` | 0.2.0 | Yes | `#[kernel]`, `#[device]` macros |
+| 13 | `cuda-bindings` | 0.2.0 | Yes | Raw libcuda FFI |
+| 14 | `libnvvm-sys` | 0.2.0 | Yes | libNVVM FFI |
+| 15 | `nvjitlink-sys` | 0.2.0 | Yes | nvJitLink FFI |
+| 16 | `oxide-artifacts` | 0.2.0 | Yes | Embedded artifact format |
+| 17 | `reserved-oxide-symbols` | 0.2.0 | Yes | Internal naming contract |
+| 18 | `fuzzer` | 0.2.0 | Yes | Differential fuzzer |
+
+*Note: `rustc-codegen-cuda` is the 18th functional crate but lives outside the Cargo workspace due to nightly rustc dependency.*
+
+---
+
+## Conclusion
+
+cuda-oxide is a **systems-grade compiler construction kit** with three reusable layers:
+
+1. **Pliron IR layer** (`dialect-mir`, `dialect-nvvm`, `mir-lower`, `llvm-export`) — can be reused for any source language that targets NVIDIA GPUs.
+2. **Rustc integration layer** (`mir-importer`, `rustc-codegen-cuda`) — specific to Rust but exposes a clean Stable MIR → Pliron bridge.
+3. **Runtime layer** (`cuda-core`, `cuda-host`, `cuda-async`) — completely language-agnostic; can load and launch PTX from any compiler.
+
+For **Flux→PTX integration**, the highest-leverage approach is:
+1. Build `flux-importer` that constructs `dialect-mir` ops directly from Flux bytecode.
+2. Reuse the entire existing pipeline from `verify_operation()` through `generate_ptx()`.
+3. Feed the resulting PTX into `cuda-core`/`cuda-host` for runtime loading.
+4. Add `oxide-constructs`, `oxide-crdt`, and fleet coordination as higher-level runtime layers.
+
+The compiler backend is the **connective tissue** between intent and execution. It is well-factored, extensively tested, and ready to support additional frontends.
