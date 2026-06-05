@@ -402,10 +402,16 @@ impl CudaCodegenConfig {
 }
 
 impl CodegenBackend for CudaCodegenBackend {
+    /// Backend identifier returned to rustc: `"cuda"`.
     fn name(&self) -> &'static str {
         "cuda"
     }
 
+    /// Initialize the backend and the underlying LLVM backend.
+    ///
+    /// Called once per crate during compilation startup. Logging is deferred
+    /// to [`codegen_crate`](CudaCodegenBackend::codegen_crate) to avoid noise
+    /// from dependency crates that have no device code.
     fn init(&self, sess: &Session) {
         // Note: Don't log here - init() is called for ALL crates including dependencies.
         // We log in codegen_crate() only when there are kernels to compile.
@@ -414,6 +420,7 @@ impl CodegenBackend for CudaCodegenBackend {
         self.llvm_backend.init(sess);
     }
 
+    /// Print the backend version to stdout, then delegate to the LLVM backend.
     fn print_version(&self) {
         println!(
             "rustc_codegen_cuda version {} (wrapping rustc_codegen_llvm)",
@@ -422,14 +429,17 @@ impl CodegenBackend for CudaCodegenBackend {
         self.llvm_backend.print_version();
     }
 
+    /// Return the target CPU string, delegating to the LLVM backend.
     fn target_cpu(&self, sess: &Session) -> String {
         self.llvm_backend.target_cpu(sess)
     }
 
+    /// Return the target configuration, delegating to the LLVM backend.
     fn target_config(&self, sess: &Session) -> rustc_codegen_ssa::TargetConfig {
         self.llvm_backend.target_config(sess)
     }
 
+    /// Register query providers, delegating to the LLVM backend.
     fn provide(&self, providers: &mut rustc_middle::util::Providers) {
         // Delegate to LLVM backend
         self.llvm_backend.provide(providers);
@@ -663,6 +673,9 @@ impl CodegenBackend for CudaCodegenBackend {
         })
     }
 
+    /// Join the ongoing codegen, delegating host compilation to the LLVM
+    /// backend and appending any oxide artifact objects as additional compiled
+    /// modules.
     fn join_codegen(
         &self,
         ongoing_codegen: Box<dyn Any>,
@@ -689,6 +702,7 @@ impl CodegenBackend for CudaCodegenBackend {
         (compiled_modules, work_products)
     }
 
+    /// Link the final binary, delegating entirely to the LLVM backend.
     fn link(
         &self,
         sess: &Session,
