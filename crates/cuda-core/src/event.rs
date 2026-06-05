@@ -51,6 +51,8 @@ unsafe impl Sync for CudaEvent {}
 impl Drop for CudaEvent {
     fn drop(&mut self) {
         self.ctx.record_err(self.ctx.bind_to_thread());
+        // SAFETY: cu_event is a valid CUevent created by cuEventCreate; Drop has
+        // exclusive ownership so this executes exactly once after bind_to_thread.
         self.ctx
             .record_err(unsafe { cuda_bindings::cuEventDestroy_v2(self.cu_event).result() });
     }

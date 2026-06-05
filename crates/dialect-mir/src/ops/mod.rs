@@ -104,29 +104,51 @@
 
 use pliron::context::Context;
 
+/// Aggregate module.
 pub mod aggregate;
+/// Arithmetic module.
 pub mod arithmetic;
+/// Call module.
 pub mod call;
+/// Cast module.
 pub mod cast;
+/// Comparison module.
 pub mod comparison;
+/// Constants module.
 pub mod constants;
+/// Control flow module.
 pub mod control_flow;
+/// Enum ops module.
 pub mod enum_ops;
+/// Function module.
 pub mod function;
+/// Memory module.
 pub mod memory;
+/// Storage module.
 pub mod storage;
 
 // Re-export all operations for convenient access
+/// Re-exported from `aggregate::*`.
 pub use aggregate::*;
+/// Re-exported from `arithmetic::*`.
 pub use arithmetic::*;
+/// Re-exported from `call::*`.
 pub use call::*;
+/// Re-exported from `cast::*`.
 pub use cast::*;
+/// Re-exported from `comparison::*`.
 pub use comparison::*;
+/// Re-exported from `constants::*`.
 pub use constants::*;
+/// Re-exported from `control_flow::*`.
 pub use control_flow::*;
+/// Re-exported from `enum_ops::*`.
 pub use enum_ops::*;
+/// Re-exported from `function::*`.
 pub use function::*;
+/// Re-exported from `memory::*`.
 pub use memory::*;
+/// Re-exported from `storage::*`.
 pub use storage::*;
 
 /// Register all MIR dialect operations into the given context.

@@ -31,12 +31,19 @@
 //! - Use `rewriter.replace_operation` to map results and erase the MIR op.
 //! - Use `operands_info` to recover pre-conversion types when needed.
 
+/// Aggregate module.
 pub mod aggregate;
+/// Arithmetic module.
 pub mod arithmetic;
+/// Call module.
 pub mod call;
+/// Cast module.
 pub mod cast;
+/// Constants module.
 pub mod constants;
+/// Control flow module.
 pub mod control_flow;
+/// Memory module.
 pub mod memory;
 
 #[cfg(test)]

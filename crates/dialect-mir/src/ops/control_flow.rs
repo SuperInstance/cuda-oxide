@@ -52,6 +52,7 @@ use super::function::MirFuncOp;
     format,
     interfaces = [NResultsInterface<0>, IsTerminatorInterface]
 )]
+/// `MirReturnOp` data structure.
 pub struct MirReturnOp;
 
 impl MirReturnOp {
@@ -134,6 +135,7 @@ impl Verify for MirReturnOp {
     format,
     interfaces = [NResultsInterface<0>, IsTerminatorInterface]
 )]
+/// `MirGotoOp` data structure.
 pub struct MirGotoOp;
 
 impl MirGotoOp {
@@ -225,6 +227,7 @@ impl BranchOpInterface for MirGotoOp {
     format,
     interfaces = [NResultsInterface<0>, IsTerminatorInterface, OperandSegmentInterface]
 )]
+/// `MirCondBranchOp` data structure.
 pub struct MirCondBranchOp;
 
 impl MirCondBranchOp {
@@ -351,6 +354,7 @@ impl BranchOpInterface for MirCondBranchOp {
     format,
     interfaces = [NResultsInterface<0>, IsTerminatorInterface, OperandSegmentInterface]
 )]
+/// `MirAssertOp` data structure.
 pub struct MirAssertOp;
 
 impl MirAssertOp {
@@ -457,6 +461,7 @@ impl BranchOpInterface for MirAssertOp {
         IsTerminatorInterface
     ]
 )]
+/// `MirUnreachableOp` data structure.
 pub struct MirUnreachableOp;
 
 impl MirUnreachableOp {

@@ -63,6 +63,8 @@ impl Drop for CudaStream {
         self.ctx.record_err(self.ctx.bind_to_thread());
         if !self.cu_stream.is_null() {
             self.ctx.num_streams.fetch_sub(1, Ordering::Relaxed);
+            // SAFETY: cu_stream is a non-null handle created by cuStreamCreate;
+            // Drop has exclusive ownership so this executes exactly once.
             self.ctx
                 .record_err(unsafe { cuda_bindings::cuStreamDestroy_v2(self.cu_stream).result() });
         }
@@ -84,6 +86,8 @@ impl CudaStream {
     /// completes.
     pub fn synchronize(&self) -> Result<(), DriverError> {
         self.ctx.bind_to_thread()?;
+        // SAFETY: bind_to_thread() ensures the owning context is current; cu_stream
+        // is a valid CUstream handle (null for the default stream is also accepted).
         unsafe { cuda_bindings::cuStreamSynchronize(self.cu_stream) }.result()
     }
 
@@ -97,6 +101,8 @@ impl CudaStream {
         self.ctx.bind_to_thread()?;
         self.ctx.num_streams.fetch_add(1, Ordering::Relaxed);
         let mut cu_stream = MaybeUninit::uninit();
+        // SAFETY: cu_stream is a valid MaybeUninit out-param; bind_to_thread() above
+        // ensures the context is current so cuStreamCreate can attach the new stream.
         let cu_stream = unsafe {
             cuda_bindings::cuStreamCreate(
                 cu_stream.as_mut_ptr(),
@@ -144,6 +150,8 @@ impl CudaStream {
     /// recorded `event` has completed).
     pub fn wait(&self, event: &CudaEvent) -> Result<(), DriverError> {
         self.ctx.bind_to_thread()?;
+        // SAFETY: bind_to_thread() makes the owning context current; cu_stream and
+        // event.cu_event() are valid handles from the same context.
         unsafe {
             cuda_bindings::cuStreamWaitEvent(
                 self.cu_stream,
@@ -173,6 +181,9 @@ impl CudaStream {
         host_func: F,
     ) -> Result<(), DriverError> {
         let boxed = Box::new(host_func);
+        // SAFETY: boxed is a heap-allocated Box<F> cast to *mut c_void; the driver
+        // calls callback_wrapper exactly once, which reclaims the Box. cu_stream is
+        // valid and the context is current (callers are expected to hold the stream).
         unsafe {
             cuda_bindings::cuLaunchHostFunc(
                 self.cu_stream,
@@ -198,6 +209,8 @@ impl CudaStream {
     ///   otherwise).
     unsafe extern "C" fn callback_wrapper<F: FnOnce() + Send>(callback: *mut c_void) {
         let _ = std::panic::catch_unwind(|| {
+            // SAFETY: callback was created by Box::into_raw(Box::new(f: F)) in
+            // launch_host_function; the driver calls this trampoline exactly once.
             let callback: Box<F> = unsafe { Box::from_raw(callback as *mut F) };
             callback();
         });

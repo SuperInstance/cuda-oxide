@@ -38,18 +38,22 @@ impl FloatTypeInterface for MirFP16Type {
 #[pliron_type(name = "mir.tuple", format = "`<` vec($types, CharSpace(`,`)) `>`")]
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
 pub struct MirTupleType {
+    /// Public API item.
     pub types: Vec<Ptr<TypeObj>>,
 }
 
 impl MirTupleType {
+    /// Get or create a unique instance in the context.
     pub fn get(ctx: &mut Context, types: Vec<Ptr<TypeObj>>) -> TypePtr<Self> {
         Type::register_instance(MirTupleType { types }, ctx)
     }
 
+    /// Return an existing instance if one already exists in the context.
     pub fn get_existing(ctx: &Context, types: Vec<Ptr<TypeObj>>) -> Option<TypePtr<Self>> {
         Type::get_instance(MirTupleType { types }, ctx)
     }
 
+    /// Return the contained types.
     pub fn get_types(&self) -> &[Ptr<TypeObj>] {
         &self.types
     }
@@ -99,9 +103,13 @@ pub mod address_space {
     format = "`<` $pointee `,` `mutable:` $is_mutable `,` `addrspace:` $address_space `>`"
 )]
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
+/// `MirPtrType` — pliron type for MIR dialect.
 pub struct MirPtrType {
+    /// Public API item.
     pub pointee: Ptr<TypeObj>,
+    /// Public API item.
     pub is_mutable: bool,
+    /// Public API item.
     pub address_space: u32,
 }
 
@@ -156,6 +164,7 @@ impl MirPtrType {
         Self::get(ctx, pointee, is_mutable, address_space::TMEM)
     }
 
+    /// Return an existing instance if one already exists in the context.
     pub fn get_existing(
         ctx: &Context,
         pointee: Ptr<TypeObj>,
@@ -172,10 +181,12 @@ impl MirPtrType {
         )
     }
 
+    /// Return `true` if mutable.
     pub fn is_mutable(&self) -> bool {
         self.is_mutable
     }
 
+    /// `address_space` function.
     pub fn address_space(&self) -> u32 {
         self.address_space
     }
@@ -208,18 +219,22 @@ impl Verify for MirPtrType {
 #[pliron_type(name = "mir.slice", format = "`<` $element_ty `>`")]
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
 pub struct MirSliceType {
+    /// Public API item.
     pub element_ty: Ptr<TypeObj>,
 }
 
 impl MirSliceType {
+    /// Get or create a unique instance in the context.
     pub fn get(ctx: &mut Context, element_ty: Ptr<TypeObj>) -> TypePtr<Self> {
         Type::register_instance(MirSliceType { element_ty }, ctx)
     }
 
+    /// Return an existing instance if one already exists in the context.
     pub fn get_existing(ctx: &Context, element_ty: Ptr<TypeObj>) -> Option<TypePtr<Self>> {
         Type::get_instance(MirSliceType { element_ty }, ctx)
     }
 
+    /// `element_type` function.
     pub fn element_type(&self) -> Ptr<TypeObj> {
         self.element_ty
     }
@@ -241,18 +256,22 @@ impl Verify for MirSliceType {
 #[pliron_type(name = "mir.disjoint_slice", format = "`<` $element_ty `>`")]
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
 pub struct MirDisjointSliceType {
+    /// Public API item.
     pub element_ty: Ptr<TypeObj>,
 }
 
 impl MirDisjointSliceType {
+    /// Get or create a unique instance in the context.
     pub fn get(ctx: &mut Context, element_ty: Ptr<TypeObj>) -> TypePtr<Self> {
         Type::register_instance(MirDisjointSliceType { element_ty }, ctx)
     }
 
+    /// Return an existing instance if one already exists in the context.
     pub fn get_existing(ctx: &Context, element_ty: Ptr<TypeObj>) -> Option<TypePtr<Self>> {
         Type::get_instance(MirDisjointSliceType { element_ty }, ctx)
     }
 
+    /// `element_type` function.
     pub fn element_type(&self) -> Ptr<TypeObj> {
         self.element_ty
     }
@@ -294,6 +313,7 @@ impl Verify for MirDisjointSliceType {
     format = "`<` $name `,` `[` vec($field_names, CharSpace(`,`)) `]` `,` `[` vec($field_types, CharSpace(`,`)) `]` `,` `[` vec($mem_to_decl, CharSpace(`,`)) `]` `,` `[` vec($field_offsets, CharSpace(`,`)) `]` `,` $total_size `>`"
 )]
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
+/// `MirStructType` — pliron type for MIR dialect.
 pub struct MirStructType {
     /// The struct name (e.g., "TmemF32x32")
     pub name: String,
@@ -477,7 +497,9 @@ impl Verify for MirStructType {
 #[pliron_type(name = "mir.array", format = "`<` $element_ty `,` $size `>`")]
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
 pub struct MirArrayType {
+    /// Public API item.
     pub element_ty: Ptr<TypeObj>,
+    /// Public API item.
     pub size: u64,
 }
 
@@ -558,6 +580,7 @@ impl EnumVariant {
     format = "`<` $name `,` $discriminant_ty `,` `[` vec($variant_names, CharSpace(`,`)) `]` `,` `[` vec($variant_field_counts, CharSpace(`,`)) `]` `,` `[` vec($all_field_types, CharSpace(`,`)) `]` `>`"
 )]
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
+/// `MirEnumType` — pliron type for MIR dialect.
 pub struct MirEnumType {
     /// The enum name (e.g., "Option", "Result")
     pub name: String,

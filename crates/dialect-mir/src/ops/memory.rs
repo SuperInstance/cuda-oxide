@@ -72,6 +72,7 @@ type PlironResult<T> = pliron::result::Result<T>;
     format,
     interfaces = [NOpdsInterface<0>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirAllocaOp` data structure.
 pub struct MirAllocaOp;
 
 impl MirAllocaOp {
@@ -175,6 +176,7 @@ impl PromotableAllocationInterface for MirAllocaOp {
     format,
     interfaces = [NOpdsInterface<1>, OneOpdInterface, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirAssignOp` data structure.
 pub struct MirAssignOp;
 
 impl MirAssignOp {
@@ -223,6 +225,7 @@ impl Verify for MirAssignOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<0>]
 )]
+/// `MirStoreOp` data structure.
 pub struct MirStoreOp;
 
 impl MirStoreOp {
@@ -326,6 +329,7 @@ impl PromotableOpInterface for MirStoreOp {
     format,
     interfaces = [NOpdsInterface<1>, OneOpdInterface, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirLoadOp` data structure.
 pub struct MirLoadOp;
 
 impl MirLoadOp {
@@ -439,6 +443,7 @@ impl PromotableOpInterface for MirLoadOp {
     interfaces = [NOpdsInterface<1>, OneOpdInterface, NResultsInterface<1>, OneResultInterface],
     attributes = (mutable: MutabilityAttr)
 )]
+/// `MirRefOp` data structure.
 pub struct MirRefOp;
 
 impl MirRefOp {
@@ -525,6 +530,7 @@ impl Verify for MirRefOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirPtrOffsetOp` data structure.
 pub struct MirPtrOffsetOp;
 
 impl MirPtrOffsetOp {
@@ -620,6 +626,7 @@ impl Verify for MirPtrOffsetOp {
         mir_alignment: IntegerAttr
     )
 )]
+/// `MirSharedAllocOp` data structure.
 pub struct MirSharedAllocOp;
 
 impl MirSharedAllocOp {
@@ -720,6 +727,7 @@ impl Verify for MirSharedAllocOp {
         global_alignment: IntegerAttr
     )
 )]
+/// `MirGlobalAllocOp` data structure.
 pub struct MirGlobalAllocOp;
 
 impl MirGlobalAllocOp {
@@ -829,6 +837,7 @@ impl Verify for MirGlobalAllocOp {
         extern_alignment: IntegerAttr
     )
 )]
+/// `MirExternSharedOp` data structure.
 pub struct MirExternSharedOp;
 
 impl MirExternSharedOp {

@@ -45,16 +45,22 @@
 //! - [`types::MirTupleType`] — heterogeneous tuple
 //! - [`types::MirFP16Type`] — IEEE-754 `f16`
 
+/// LLVM dialect attributes and syncscope helpers.
 pub mod attributes;
+/// All dialect operations.
 pub mod ops;
+/// GPU intrinsic op identifiers used by the MIR importer.
 pub mod rust_intrinsics;
+/// LLVM dialect types and address-space helpers.
 pub mod types;
 
 use pliron::context::Context;
 use pliron::dialect::{Dialect, DialectName};
 
+/// Public API item.
 pub const MIR_DIALECT_NAME: &str = "mir";
 
+/// Register all dialect ops, types, and attributes with the given context.
 pub fn register(ctx: &mut Context) {
     Dialect::register(ctx, &DialectName::new(MIR_DIALECT_NAME));
     ops::register(ctx);

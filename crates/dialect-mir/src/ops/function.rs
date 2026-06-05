@@ -72,6 +72,7 @@ use pliron_derive::pliron_op;
     ],
     attributes = (mir_func_type: TypeAttr)
 )]
+/// `MirFuncOp` data structure.
 pub struct MirFuncOp;
 
 impl MirFuncOp {

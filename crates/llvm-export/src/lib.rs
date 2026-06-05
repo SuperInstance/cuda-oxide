@@ -19,10 +19,12 @@
 //! (`Context::default` runs all link-time `CONTEXT_REGISTRATIONS`), so no
 //! explicit `register()` entry point is needed.
 
+/// LLVM IR textual exporter.
 pub mod export;
 
 /// LLVM types: re-exported from pliron-llvm, plus GPU address-space helpers.
 pub mod types {
+    /// Re-exported from `pliron_llvm::types::*`.
     pub use pliron_llvm::types::*;
 
     /// `f16` maps to pliron core's builtin `FP16Type`.
@@ -47,6 +49,7 @@ pub mod types {
     }
 
     use pliron::{context::Context, r#type::TypePtr};
+    /// Re-exported from `pliron_llvm::types::PointerType`.
     pub use pliron_llvm::types::PointerType;
 
     /// Address-space convenience constructors/predicates re-homed from the
@@ -92,6 +95,7 @@ pub mod types {
 /// LLVM attributes: re-exported from pliron-llvm, plus the syncscope enum and
 /// the cuda-oxide names for atomic ordering / rmw-kind.
 pub mod attributes {
+    /// Re-exported from `pliron_llvm::attributes::*`.
     pub use pliron_llvm::attributes::*;
 
     /// `f16` constants use pliron core's builtin `FPHalfAttr`.
@@ -132,6 +136,7 @@ pub mod attributes {
 /// LLVM ops: re-exported from pliron-llvm, plus the builtin `ConstantOp` and a
 /// convergent inline-asm constructor.
 pub mod ops {
+    /// Re-exported from `pliron_llvm::ops::*`.
     pub use pliron_llvm::ops::*;
 
     /// `ConstantOp` moved from the LLVM dialect to pliron core `builtin`.
@@ -145,6 +150,7 @@ pub mod ops {
         value::Value,
     };
     use pliron_llvm::attributes::AlignmentAttr;
+    /// Re-exported from `pliron_llvm::ops::{GlobalOp, InlineAsmOp}`.
     pub use pliron_llvm::ops::{GlobalOp, InlineAsmOp};
 
     /// Convergent inline-asm constructor re-homed from the pre-migration local
@@ -225,6 +231,7 @@ pub mod ops {
 
 /// LLVM op-interfaces, re-exported from pliron-llvm.
 pub mod op_interfaces {
+    /// Re-exported from `pliron_llvm::op_interfaces::*`.
     pub use pliron_llvm::op_interfaces::*;
 }
 

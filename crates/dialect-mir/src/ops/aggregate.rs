@@ -79,6 +79,7 @@ use crate::types::{
     interfaces = [NOpdsInterface<1>, OneOpdInterface, NResultsInterface<1>, OneResultInterface],
     attributes = (index: FieldIndexAttr)
 )]
+/// `MirExtractFieldOp` data structure.
 pub struct MirExtractFieldOp;
 
 impl MirExtractFieldOp {
@@ -296,6 +297,7 @@ impl Verify for MirExtractFieldOp {
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface],
     attributes = (insert_index: FieldIndexAttr)
 )]
+/// `MirInsertFieldOp` data structure.
 pub struct MirInsertFieldOp;
 
 impl MirInsertFieldOp {
@@ -430,6 +432,7 @@ impl Verify for MirInsertFieldOp {
     format,
     interfaces = [NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirConstructStructOp` data structure.
 pub struct MirConstructStructOp;
 
 impl MirConstructStructOp {
@@ -523,6 +526,7 @@ impl Verify for MirConstructStructOp {
     format,
     interfaces = [NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirConstructTupleOp` data structure.
 pub struct MirConstructTupleOp;
 
 impl MirConstructTupleOp {
@@ -636,6 +640,7 @@ impl Verify for MirConstructTupleOp {
     format,
     interfaces = [NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirConstructArrayOp` data structure.
 pub struct MirConstructArrayOp;
 
 impl MirConstructArrayOp {
@@ -756,6 +761,7 @@ impl Verify for MirConstructArrayOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirExtractArrayElementOp` data structure.
 pub struct MirExtractArrayElementOp;
 
 impl MirExtractArrayElementOp {
@@ -875,6 +881,7 @@ impl Verify for MirExtractArrayElementOp {
     interfaces = [NOpdsInterface<1>, OneOpdInterface, NResultsInterface<1>, OneResultInterface],
     attributes = (field_index: FieldIndexAttr)
 )]
+/// `MirFieldAddrOp` data structure.
 pub struct MirFieldAddrOp;
 
 impl MirFieldAddrOp {
@@ -1014,6 +1021,7 @@ impl Verify for MirFieldAddrOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirArrayElementAddrOp` data structure.
 pub struct MirArrayElementAddrOp;
 
 impl MirArrayElementAddrOp {

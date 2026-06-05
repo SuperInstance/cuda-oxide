@@ -47,7 +47,9 @@ mod ops;
 mod state;
 mod types;
 
+/// Re-exported from `config::{ExportBackendConfig, NvvmExportConfig, PtxExportConfig}`.
 pub use config::{ExportBackendConfig, NvvmExportConfig, PtxExportConfig};
+/// Re-exported from `externs::{AsDeviceExtern, DeviceExternAttrs, DeviceExternDecl}`.
 pub use externs::{AsDeviceExtern, DeviceExternAttrs, DeviceExternDecl};
 
 use pliron::{builtin::ops::ModuleOp, context::Context};

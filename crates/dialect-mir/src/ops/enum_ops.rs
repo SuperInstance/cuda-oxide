@@ -65,6 +65,7 @@ use crate::types::MirEnumType;
     interfaces = [NResultsInterface<1>, OneResultInterface],
     attributes = (construct_enum_variant_index: VariantIndexAttr)
 )]
+/// `MirConstructEnumOp` data structure.
 pub struct MirConstructEnumOp;
 
 impl MirConstructEnumOp {
@@ -183,6 +184,7 @@ impl Verify for MirConstructEnumOp {
     format,
     interfaces = [NOpdsInterface<1>, OneOpdInterface, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirGetDiscriminantOp` data structure.
 pub struct MirGetDiscriminantOp;
 
 impl MirGetDiscriminantOp {
@@ -275,6 +277,7 @@ impl Verify for MirGetDiscriminantOp {
     interfaces = [NOpdsInterface<1>, OneOpdInterface, NResultsInterface<1>, OneResultInterface],
     attributes = (payload_variant_index: VariantIndexAttr, payload_field_index: FieldIndexAttr)
 )]
+/// `MirEnumPayloadOp` data structure.
 pub struct MirEnumPayloadOp;
 
 impl MirEnumPayloadOp {

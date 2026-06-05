@@ -34,6 +34,7 @@ use pliron_derive::pliron_op;
     interfaces = [NOpdsInterface<0>, NResultsInterface<0>],
     verifier = "succ"
 )]
+/// `MirStorageLiveOp` data structure.
 pub struct MirStorageLiveOp;
 
 // ============================================================================
@@ -56,6 +57,7 @@ pub struct MirStorageLiveOp;
     interfaces = [NOpdsInterface<0>, NResultsInterface<0>],
     verifier = "succ"
 )]
+/// `MirStorageDeadOp` data structure.
 pub struct MirStorageDeadOp;
 
 /// Register storage operations into the given context.

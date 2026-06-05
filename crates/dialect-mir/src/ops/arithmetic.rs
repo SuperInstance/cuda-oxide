@@ -42,6 +42,7 @@ use crate::types::MirTupleType;
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirAddOp` data structure.
 pub struct MirAddOp;
 
 impl Verify for MirAddOp {
@@ -78,6 +79,7 @@ impl Verify for MirAddOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirSubOp` data structure.
 pub struct MirSubOp;
 
 impl Verify for MirSubOp {
@@ -114,6 +116,7 @@ impl Verify for MirSubOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirMulOp` data structure.
 pub struct MirMulOp;
 
 impl Verify for MirMulOp {
@@ -150,6 +153,7 @@ impl Verify for MirMulOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirDivOp` data structure.
 pub struct MirDivOp;
 
 impl Verify for MirDivOp {
@@ -186,6 +190,7 @@ impl Verify for MirDivOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirRemOp` data structure.
 pub struct MirRemOp;
 
 impl Verify for MirRemOp {
@@ -243,6 +248,7 @@ impl Verify for MirRemOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirCheckedAddOp` data structure.
 pub struct MirCheckedAddOp;
 
 impl MirCheckedAddOp {
@@ -356,6 +362,7 @@ impl Verify for MirCheckedAddOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirCheckedMulOp` data structure.
 pub struct MirCheckedMulOp;
 
 impl MirCheckedMulOp {
@@ -431,6 +438,7 @@ impl Verify for MirCheckedMulOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirCheckedSubOp` data structure.
 pub struct MirCheckedSubOp;
 
 impl MirCheckedSubOp {
@@ -516,6 +524,7 @@ impl Verify for MirCheckedSubOp {
     format,
     interfaces = [NOpdsInterface<1>, OneOpdInterface, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirNegOp` data structure.
 pub struct MirNegOp;
 
 impl Verify for MirNegOp {
@@ -547,6 +556,7 @@ impl Verify for MirNegOp {
     format,
     interfaces = [NOpdsInterface<1>, OneOpdInterface, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirNotOp` data structure.
 pub struct MirNotOp;
 
 impl Verify for MirNotOp {
@@ -581,6 +591,7 @@ impl Verify for MirNotOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirShrOp` data structure.
 pub struct MirShrOp;
 
 impl Verify for MirShrOp {
@@ -611,6 +622,7 @@ impl Verify for MirShrOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirShlOp` data structure.
 pub struct MirShlOp;
 
 impl Verify for MirShlOp {
@@ -644,6 +656,7 @@ impl Verify for MirShlOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirBitAndOp` data structure.
 pub struct MirBitAndOp;
 
 impl Verify for MirBitAndOp {
@@ -678,6 +691,7 @@ impl Verify for MirBitAndOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirBitOrOp` data structure.
 pub struct MirBitOrOp;
 
 impl Verify for MirBitOrOp {
@@ -712,6 +726,7 @@ impl Verify for MirBitOrOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirBitXorOp` data structure.
 pub struct MirBitXorOp;
 
 impl Verify for MirBitXorOp {

@@ -70,15 +70,27 @@
 //! 3. Implement the conversion function in the appropriate module here
 //! 4. Use `call_intrinsic` for LLVM intrinsics or `inline_asm_convergent` for PTX
 
+/// Atomic module.
 pub mod atomic;
+/// Basic module.
 pub mod basic;
+/// Clc module.
 pub mod clc;
+/// Cluster module.
 pub mod cluster;
+/// Common module.
 pub mod common;
+/// Debug module.
 pub mod debug;
+/// Mbarrier module.
 pub mod mbarrier;
+/// Stmatrix module.
 pub mod stmatrix;
+/// Tcgen05 module.
 pub mod tcgen05;
+/// Tma module.
 pub mod tma;
+/// Warp module.
 pub mod warp;
+/// Wgmma module.
 pub mod wgmma;

@@ -61,6 +61,7 @@ use crate::attributes::MirFP16Attr;
     interfaces = [NOpdsInterface<0>, NResultsInterface<1>, OneResultInterface],
     attributes = (value: IntegerAttr)
 )]
+/// `MirConstantOp` data structure.
 pub struct MirConstantOp;
 
 impl MirConstantOp {
@@ -137,6 +138,7 @@ impl Verify for MirConstantOp {
     interfaces = [NOpdsInterface<0>, NResultsInterface<1>, OneResultInterface],
     attributes = (float_value_f16: MirFP16Attr, float_value: FPSingleAttr, float_value_f64: FPDoubleAttr)
 )]
+/// `MirFloatConstantOp` data structure.
 pub struct MirFloatConstantOp;
 
 impl MirFloatConstantOp {
@@ -208,6 +210,7 @@ impl Verify for MirFloatConstantOp {
     interfaces = [NOpdsInterface<0>, OneResultInterface, NResultsInterface<1>],
     verifier = "succ"
 )]
+/// `MirUndefOp` data structure.
 pub struct MirUndefOp;
 
 impl MirUndefOp {

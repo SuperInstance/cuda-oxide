@@ -26,8 +26,13 @@
 //! 2. Write a `pub(crate) fn convert_*` function in the relevant submodule.
 //! 3. Add an `#[op_interface_impl]` block in [`interface_impls`].
 
+/// Op interface implementations dispatching to converter functions.
 pub mod interface_impls;
+/// GPU intrinsic lowering (basic, warp, atomic, TMA, WGMMA, tcgen05, etc.).
 pub mod intrinsics;
+/// All dialect operations.
 pub mod ops;
+/// Type interface impls module.
 pub mod type_interface_impls;
+/// LLVM dialect types and address-space helpers.
 pub mod types;

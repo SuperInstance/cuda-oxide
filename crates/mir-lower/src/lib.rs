@@ -122,11 +122,17 @@
 
 #![warn(missing_docs)]
 
+/// CUDA-specific conversion state (shared globals, dynamic smem).
 pub mod context;
+/// `MirToLlvmConversion` op interface trait.
 pub mod conversion_interface;
+/// Per-op and per-type conversion logic.
 pub mod convert;
+/// Utility functions for constants, intrinsics, and IR navigation.
 pub mod helpers;
+/// Per-function lowering and entry-prologue construction.
 pub mod lowering;
+/// Type conversion trait and registry.
 pub mod type_conversion_interface;
 
 use std::collections::HashMap;

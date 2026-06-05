@@ -75,6 +75,7 @@ use pliron_derive::pliron_op;
     interfaces = [NOpdsInterface<1>, OneOpdInterface, NResultsInterface<1>, OneResultInterface],
     attributes = (cast_kind: MirCastKindAttr, niche_encoding: NicheEncodingAttr)
 )]
+/// `MirCastOp` data structure.
 pub struct MirCastOp;
 
 impl MirCastOp {

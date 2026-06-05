@@ -53,6 +53,7 @@ use pliron_derive::pliron_op;
     format,
     attributes = (callee: StringAttr)
 )]
+/// `MirCallOp` data structure.
 pub struct MirCallOp;
 
 impl MirCallOp {

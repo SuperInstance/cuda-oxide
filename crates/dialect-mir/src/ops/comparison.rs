@@ -39,6 +39,7 @@ use pliron_derive::pliron_op;
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirLtOp` data structure.
 pub struct MirLtOp;
 
 impl Verify for MirLtOp {
@@ -86,6 +87,7 @@ impl Verify for MirLtOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirLeOp` data structure.
 pub struct MirLeOp;
 
 impl Verify for MirLeOp {
@@ -126,6 +128,7 @@ impl Verify for MirLeOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirGtOp` data structure.
 pub struct MirGtOp;
 
 impl Verify for MirGtOp {
@@ -166,6 +169,7 @@ impl Verify for MirGtOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirGeOp` data structure.
 pub struct MirGeOp;
 
 impl Verify for MirGeOp {
@@ -210,6 +214,7 @@ impl Verify for MirGeOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirEqOp` data structure.
 pub struct MirEqOp;
 
 impl Verify for MirEqOp {
@@ -250,6 +255,7 @@ impl Verify for MirEqOp {
     format,
     interfaces = [NOpdsInterface<2>, NResultsInterface<1>, OneResultInterface]
 )]
+/// `MirNeOp` data structure.
 pub struct MirNeOp;
 
 impl Verify for MirNeOp {

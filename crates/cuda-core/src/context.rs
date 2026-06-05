@@ -97,15 +97,18 @@ impl CudaContext {
     /// wrapped in an `Arc` for shared ownership across streams, events, and
     /// modules.
     pub fn new(ordinal: usize) -> Result<Arc<Self>, DriverError> {
+        // SAFETY: cuInit is safe to call from any thread; 0 is the only valid flags value.
         unsafe { crate::init(0)? };
 
         let cu_device = unsafe {
+            // SAFETY: cu_device is an out-param written by cuDeviceGet on CUDA_SUCCESS.
             let mut cu_device = MaybeUninit::uninit();
             cuda_bindings::cuDeviceGet(cu_device.as_mut_ptr(), ordinal as c_int).result()?;
             cu_device.assume_init()
         };
 
         let cu_ctx = unsafe {
+            // SAFETY: cu_ctx is an out-param written by cuDevicePrimaryCtxRetain on success.
             let mut cu_ctx = MaybeUninit::uninit();
             cuda_bindings::cuDevicePrimaryCtxRetain(cu_ctx.as_mut_ptr(), cu_device).result()?;
             cu_ctx.assume_init()
@@ -155,6 +158,8 @@ impl CudaContext {
     pub fn bind_to_thread(&self) -> Result<(), DriverError> {
         self.check_err()?;
         let mut current = MaybeUninit::uninit();
+        // SAFETY: current is a valid MaybeUninit out-param for cuCtxGetCurrent.
+        // cuCtxSetCurrent is safe when cu_ctx is a valid primary context handle.
         unsafe {
             cuda_bindings::cuCtxGetCurrent(current.as_mut_ptr()).result()?;
             let current = current.assume_init();
@@ -171,6 +176,7 @@ impl CudaContext {
     /// Binds the context first, then calls `cuCtxSynchronize`.
     pub fn synchronize(&self) -> Result<(), DriverError> {
         self.bind_to_thread()?;
+        // SAFETY: bind_to_thread() makes this context current on the calling thread.
         unsafe { cuda_bindings::cuCtxSynchronize() }.result()
     }
 
@@ -201,6 +207,8 @@ impl CudaContext {
             self.synchronize()?;
         }
         let mut cu_stream = MaybeUninit::uninit();
+        // SAFETY: cu_stream is a valid MaybeUninit out-param; bind_to_thread() above
+        // ensures the context is current so cuStreamCreate can attach the stream to it.
         let cu_stream = unsafe {
             cuda_bindings::cuStreamCreate(
                 cu_stream.as_mut_ptr(),
@@ -223,6 +231,8 @@ impl CudaContext {
     pub fn device_name(&self) -> Result<String, DriverError> {
         self.bind_to_thread()?;
         let mut buf = [0; 256];
+        // SAFETY: buf is a 256-byte stack-allocated buffer, which is the documented
+        // maximum for device names including the NUL terminator.
         unsafe {
             cuda_bindings::cuDeviceGetName(buf.as_mut_ptr(), buf.len() as c_int, self.cu_device)
                 .result()?;
@@ -242,6 +252,8 @@ impl CudaContext {
         self.bind_to_thread()?;
         let mut major = MaybeUninit::uninit();
         let mut minor = MaybeUninit::uninit();
+        // SAFETY: major and minor are valid MaybeUninit out-params; cuDeviceGetAttribute
+        // initializes them on CUDA_SUCCESS.
         unsafe {
             cuda_bindings::cuDeviceGetAttribute(
                 major.as_mut_ptr(),

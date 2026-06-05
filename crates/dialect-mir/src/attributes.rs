@@ -85,8 +85,11 @@ pub struct VariantIndexAttr(pub u32);
 #[pliron_attr(name = "mir.niche_encoding", format, verifier = "succ")]
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]
 pub struct NicheEncodingAttr {
+    /// Public API item.
     pub niche_start: u64,
+    /// Public API item.
     pub niche_variant_idx: u32,
+    /// Public API item.
     pub untagged_variant_idx: u32,
 }
 
@@ -96,10 +99,12 @@ pub struct NicheEncodingAttr {
 pub struct MirFP16Attr(pub apfloat::Half);
 
 impl MirFP16Attr {
+    /// Construct from raw bits.
     pub fn from_bits(bits: u16) -> Self {
         MirFP16Attr(<apfloat::Half as Float>::from_bits(bits as u128))
     }
 
+    /// Return the raw bit representation.
     pub fn to_bits(&self) -> u16 {
         self.0.to_bits() as u16
     }
@@ -149,6 +154,7 @@ impl FloatAttr for MirFP16Attr {
     }
 }
 
+/// Register all dialect ops, types, and attributes with the given context.
 pub fn register(ctx: &mut Context) {
     MirCastKindAttr::register(ctx);
     MutabilityAttr::register(ctx);
