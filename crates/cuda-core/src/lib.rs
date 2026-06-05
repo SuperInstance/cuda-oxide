@@ -3,26 +3,48 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Safe RAII wrappers around the CUDA driver API.
+//! Entry point for GPU computing in Rust.
 //!
-//! This crate provides Rust-idiomatic, RAII-managed wrappers over the low-level CUDA
-//! driver API (`cuInit`, `cuCtx*`, `cuStream*`, `cuEvent*`, `cuModule*`, `cuMem*`).
+//! `cuda-core` sits at the base of the CUDA Oxide stack. It provides safe,
+//! RAII-managed wrappers over the low-level CUDA driver API for **context
+//! management**, **device memory allocation**, and **kernel launching**.
 //! All GPU resources are released automatically on [`Drop`], and error codes are
-//! propagated as [`DriverError`] values.
+//! propagated as [`DriverError`] values. Every other crate in the ecosystem
+//! builds on the types and primitives defined here.
+//!
+//! # Stack diagram
+//!
+//! ```text
+//!                      ┌─────────────┐
+//!                      │  cuda-core  │
+//!                      │ (this crate)│
+//!                      └──────┬──────┘
+//!             ┌───────────────┼───────────────┐
+//!             │               │               │
+//!       ┌─────┴─────┐   ┌─────┴─────┐   ┌─────┴─────┐
+//!       │cuda-device│   │cuda-async │   │ cuda-host │
+//!       │  @device  │   │  @host    │   │  @host    │
+//!       └───────────┘   └───────────┘   └───────────┘
+//! ```
+//!
+//! - **cuda-core** — driver API wrappers, contexts, streams, memory, modules.
+//! - **cuda-device** — GPU-side programming model (kernels run here).
+//! - **cuda-async** — futures-based async execution layer over streams.
+//! - **cuda-host** — host-side utilities and helpers.
 //!
 //! # Architecture
 //!
-//! - [`CudaContext`] -- retains the device primary context and tracks per-context
+//! - [`CudaContext`] — retains the device primary context and tracks per-context
 //!   state (stream count, error accumulation).
-//! - [`CudaStream`] -- non-blocking stream with fork/join parallelism and host
+//! - [`CudaStream`] — non-blocking stream with fork/join parallelism and host
 //!   callback support for bridging to async Rust.
-//! - [`CudaEvent`] -- lightweight synchronization primitive for inter-stream
+//! - [`CudaEvent`] — lightweight synchronization primitive for inter-stream
 //!   ordering and elapsed-time measurement.
-//! - [`CudaModule`] / [`CudaFunction`] -- PTX/cubin loading and kernel handle
+//! - [`CudaModule`] / [`CudaFunction`] — PTX/cubin loading and kernel handle
 //!   extraction.
-//! - [`PinnedHostBuffer`] -- page-locked host memory for CUDA transfers.
-//! - [`LaunchConfig`] -- grid/block dimension helper.
-//! - [`memory`] -- free functions for device allocation, transfer, and memset
+//! - [`PinnedHostBuffer`] — page-locked host memory for CUDA transfers.
+//! - [`LaunchConfig`] — grid/block dimension helper.
+//! - [`memory`] — free functions for device allocation, transfer, and memset
 //!   (both stream-ordered async and synchronous variants).
 //!
 //! # Context binding
@@ -63,16 +85,25 @@ pub mod stream;
 /// CUDA Virtual Memory Management (VMM) for physical alloc, VA reservation, and mapping.
 pub mod vmm;
 
+/// CUDA context handle (primary context, RAII).
 pub use context::CudaContext;
 /// Raw CUDA driver bindings re-exported for direct access when needed.
 pub use cuda_bindings as sys;
+/// Device buffer and copy trait for device-memory management.
 pub use device_buffer::{DeviceBuffer, DeviceCopy};
+/// Embedded module discovery and loading helpers.
 pub use embedded::{EmbeddedModule, EmbeddedModuleError};
+/// CUDA driver error type and result conversion trait.
 pub use error::{DriverError, IntoResult};
+/// CUDA event for timing and synchronization.
 pub use event::CudaEvent;
+/// Grid/block launch configuration.
 pub use launch::LaunchConfig;
+/// Loaded CUDA module, kernel function handle, and constant handle.
 pub use module::{ConstantHandle, CudaFunction, CudaModule};
+/// Page-locked host memory buffer for fast CUDA transfers.
 pub use pinned_host_buffer::PinnedHostBuffer;
+/// CUDA stream handle (non-blocking, RAII, host callbacks).
 pub use stream::CudaStream;
 
 use std::ffi::c_uint;
