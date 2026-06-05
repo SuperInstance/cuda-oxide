@@ -140,6 +140,8 @@ pub unsafe fn launch_kernel(
     stream: cuda_bindings::CUstream,
     kernel_params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
+    // SAFETY: caller upholds the preconditions documented on this function: valid
+    // func, stream, kernel_params, and grid/block dimensions within device limits.
     unsafe {
         cuda_bindings::cuLaunchKernel(
             func,
@@ -193,6 +195,8 @@ pub unsafe fn launch_kernel_on_stream(
     kernel_params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
     stream.context().bind_to_thread()?;
+    // SAFETY: bind_to_thread() ensures the stream's context is current; func and
+    // stream belong to the same context (caller contract); args are valid per caller.
     unsafe {
         launch_kernel(
             func.cu_function(),
@@ -240,7 +244,12 @@ pub unsafe fn launch_kernel_ex(
     // CUlaunchAttribute_st is opaque (see cuda-bindings/build.rs) for CUDA 13.2+
     // compatibility. C layout: { id: u32 @ 0, pad: [u8;4] @ 4, value: union @ 8 }.
     // clusterDim is three u32 fields (x, y, z) at offset 0 within the value union.
+    // SAFETY: CUlaunchAttribute_st has deterministic C layout; zeroed() gives a
+    // valid all-zero starting state for a struct with no niche requirements.
     let mut cluster_attr: cuda_bindings::CUlaunchAttribute_st = unsafe { std::mem::zeroed() };
+    // SAFETY: CUlaunchAttribute_st layout: id (u32) at offset 0, value union at
+    // offset 8. clusterDim is the first union member (three u32 fields). Writing
+    // via raw pointers at these offsets is sound for the documented struct layout.
     unsafe {
         let base = &mut cluster_attr as *mut _ as *mut u8;
         // id at offset 0
@@ -266,6 +275,8 @@ pub unsafe fn launch_kernel_ex(
         numAttrs: 1,
     };
 
+    // SAFETY: caller upholds preconditions on this function; config and kernel_params
+    // are valid for the duration of this call.
     unsafe {
         cuda_bindings::cuLaunchKernelEx(
             &config,
@@ -310,6 +321,8 @@ pub unsafe fn launch_kernel_ex_on_stream(
     kernel_params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
     stream.context().bind_to_thread()?;
+    // SAFETY: bind_to_thread() ensures the context is current; func and stream belong
+    // to the same context; cluster_dim satisfies device limits per caller contract.
     unsafe {
         launch_kernel_ex(
             func.cu_function(),
@@ -363,7 +376,11 @@ pub unsafe fn launch_kernel_cooperative(
     // compatibility. C layout: { id: u32 @ 0, pad: [u8;4] @ 4, value: union @ 8 }.
     // For the COOPERATIVE attribute the value union holds a single `int cooperative`
     // at offset 0 — set to 1 to enable, 0 to disable.
+    // SAFETY: CUlaunchAttribute_st has no niche requirements; zeroed() is a valid
+    // initial state.
     let mut coop_attr: cuda_bindings::CUlaunchAttribute_st = unsafe { std::mem::zeroed() };
+    // SAFETY: Same layout reasoning as launch_kernel_ex: id at offset 0, cooperative
+    // int at offset 8 within the value union.
     unsafe {
         let base = &mut coop_attr as *mut _ as *mut u8;
         (base as *mut u32)
@@ -385,6 +402,7 @@ pub unsafe fn launch_kernel_cooperative(
         numAttrs: 1,
     };
 
+    // SAFETY: caller upholds preconditions; config and kernel_params valid for the call.
     unsafe {
         cuda_bindings::cuLaunchKernelEx(
             &config,
@@ -421,6 +439,8 @@ pub unsafe fn launch_kernel_cooperative_on_stream(
     kernel_params: &mut [*mut std::ffi::c_void],
 ) -> Result<(), DriverError> {
     stream.context().bind_to_thread()?;
+    // SAFETY: bind_to_thread() ensures the context is current; func and stream belong
+    // to the same context; cooperative launch limits satisfied per caller contract.
     unsafe {
         launch_kernel_cooperative(
             func.cu_function(),
