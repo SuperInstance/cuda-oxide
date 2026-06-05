@@ -242,6 +242,10 @@ impl<'kernel, IndexSpace> fmt::Debug for ThreadIndex<'kernel, IndexSpace> {
     }
 }
 
+/// Kernel-scope helpers injected by the `#[kernel]` and `#[device]` macros.
+///
+/// These items are `#[doc(hidden)]` because users never call them directly;
+/// the proc macros rewrite public `thread::index_*` call sites to use them.
 #[doc(hidden)]
 pub mod __internal {
     use super::{Index1D, Index2D, KernelScope, Runtime2DIndex, ThreadIndex};
@@ -277,6 +281,12 @@ pub mod __internal {
         unsafe { KernelScope::new() }
     }
 
+    /// Internal implementation of [`super::index_1d`].
+    ///
+    /// Reads the hardware `threadIdx.x`, `blockIdx.x`, and `blockDim.x`
+    /// special registers and computes `bid * bdim + tid`. The result is
+    /// injected into a `ThreadIndex<'kernel, Index1D>` whose `'kernel`
+    /// lifetime is borrowed from the supplied `KernelScope`.
     #[inline(always)]
     pub fn index_1d<'kernel>(
         scope: &'kernel KernelScope<'kernel>,
@@ -287,6 +297,11 @@ pub mod __internal {
         unsafe { ThreadIndex::new(bid * bdim + tid, scope) }
     }
 
+    /// Internal implementation of [`super::index_2d`].
+    ///
+    /// Reads the hardware `threadIdx.{x,y}`, `blockIdx.{x,y}`, and
+    /// `blockDim.{x,y}` special registers, computes the row and column,
+    /// and returns `Some(index)` iff `col < ROW_STRIDE`.
     #[inline(always)]
     pub fn index_2d<'kernel, const ROW_STRIDE: usize>(
         scope: &'kernel KernelScope<'kernel>,
@@ -302,6 +317,13 @@ pub mod __internal {
         }
     }
 
+    /// Internal implementation of [`super::index_2d_runtime`].
+    ///
+    /// # Safety
+    ///
+    /// The caller (the proc macro) must ensure every thread in the kernel
+    /// that uses the resulting index with the same `DisjointSlice` passed
+    /// the same `row_stride`.
     #[inline(always)]
     pub unsafe fn index_2d_runtime<'kernel>(
         scope: &'kernel KernelScope<'kernel>,
@@ -463,6 +485,9 @@ pub unsafe fn index_2d_runtime<'kernel>(
 /// Get the row component of a 2D thread index.
 ///
 /// Computes: `blockIdx.y * blockDim.y + threadIdx.y`
+///
+/// Reads the `blockIdx.y`, `blockDim.y`, and `threadIdx.y` special
+/// registers. No cross-lane communication is required.
 #[inline(always)]
 pub fn index_2d_row() -> usize {
     (blockIdx_y() * blockDim_y() + threadIdx_y()) as usize
@@ -471,6 +496,9 @@ pub fn index_2d_row() -> usize {
 /// Get the column component of a 2D thread index.
 ///
 /// Computes: `blockIdx.x * blockDim.x + threadIdx.x`
+///
+/// Reads the `blockIdx.x`, `blockDim.x`, and `threadIdx.x` special
+/// registers. No cross-lane communication is required.
 #[inline(always)]
 pub fn index_2d_col() -> usize {
     (blockIdx_x() as usize) * (blockDim_x() as usize) + (threadIdx_x() as usize)
@@ -548,18 +576,31 @@ pub fn blockDim_y() -> u32 {
 // =============================================================================
 
 /// Get threadIdx.z (thread index within block, Z dimension).
+///
+/// Hardware mapping: PTX special register `%tid.z`, LLVM
+/// `@llvm.nvvm.read.ptx.sreg.tid.z()`. Like the other `threadIdx*`
+/// variants, this is a read-only special register whose value is set
+/// by the hardware scheduler when the block is launched.
 #[inline(never)]
 pub fn threadIdx_z() -> u32 {
     unreachable!("threadIdx_z called outside CUDA kernel context")
 }
 
 /// Get blockIdx.z (block index within grid, Z dimension).
+///
+/// Hardware mapping: PTX special register `%ctaid.z`, LLVM
+/// `@llvm.nvvm.read.ptx.sreg.ctaid.z()`. Read-only for the lifetime of
+/// the kernel; uniform across all threads in the same block.
 #[inline(never)]
 pub fn blockIdx_z() -> u32 {
     unreachable!("blockIdx_z called outside CUDA kernel context")
 }
 
 /// Get blockDim.z (block dimension, Z dimension).
+///
+/// Hardware mapping: PTX special register `%ntid.z`, LLVM
+/// `@llvm.nvvm.read.ptx.sreg.ntid.z()`. Uniform across all threads in
+/// the same block.
 #[inline(never)]
 pub fn blockDim_z() -> u32 {
     unreachable!("blockDim_z called outside CUDA kernel context")
@@ -570,18 +611,30 @@ pub fn blockDim_z() -> u32 {
 // =============================================================================
 
 /// Get gridDim.x — number of blocks along the X axis of the grid.
+///
+/// Hardware mapping: PTX special register `%nctaid.x`, LLVM
+/// `@llvm.nvvm.read.ptx.sreg.nctaid.x()`. Uniform across every thread
+/// in the launch.
 #[inline(never)]
 pub fn gridDim_x() -> u32 {
     unreachable!("gridDim_x called outside CUDA kernel context")
 }
 
 /// Get gridDim.y — number of blocks along the Y axis of the grid.
+///
+/// Hardware mapping: PTX special register `%nctaid.y`, LLVM
+/// `@llvm.nvvm.read.ptx.sreg.nctaid.y()`. Uniform across every thread
+/// in the launch.
 #[inline(never)]
 pub fn gridDim_y() -> u32 {
     unreachable!("gridDim_y called outside CUDA kernel context")
 }
 
 /// Get gridDim.z — number of blocks along the Z axis of the grid.
+///
+/// Hardware mapping: PTX special register `%nctaid.z`, LLVM
+/// `@llvm.nvvm.read.ptx.sreg.nctaid.z()`. Uniform across every thread
+/// in the launch.
 #[inline(never)]
 pub fn gridDim_z() -> u32 {
     unreachable!("gridDim_z called outside CUDA kernel context")

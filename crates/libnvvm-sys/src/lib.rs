@@ -78,7 +78,8 @@ enum NvvmResult {
 /// All errors surfaced by this crate.
 #[derive(Debug, Error)]
 pub enum NvvmError {
-    /// `libnvvm.so` could not be located on this system.
+    /// `libnvvm.so` could not be located on this system. `tried` lists every
+    /// path or SONAME that was probed, in order, joined by newlines.
     #[error(
         "libnvvm.so could not be located. Set LIBNVVM_PATH or CUDA_HOME, or install the CUDA Toolkit. Tried:\n  {tried}"
     )]
@@ -87,7 +88,9 @@ pub enum NvvmError {
         tried: String,
     },
 
-    /// `libnvvm.so` was loaded, but `dlsym` failed to resolve a required function.
+    /// `libnvvm.so` was loaded, but `dlsym` failed to resolve a function this
+    /// crate requires. Indicates an old or broken libNVVM that does not
+    /// export the standard NVVM IR API.
     #[error("libnvvm.so was found but a required symbol is missing: {symbol}: {source}")]
     SymbolNotFound {
         /// Name of the missing libNVVM function (e.g. `nvvmCreateProgram`).
@@ -97,7 +100,9 @@ pub enum NvvmError {
         source: libloading::Error,
     },
 
-    /// A libNVVM call returned a non-`Success` `nvvmResult`.
+    /// A libNVVM call returned a non-`Success` `nvvmResult`. `log` carries
+    /// the libNVVM program log when it is available, or the
+    /// `nvvmGetErrorString` text otherwise.
     #[error("libnvvm error in {operation}: {code:?}{}", .log.as_ref().map(|l| format!("\n--- libNVVM log ---\n{l}")).unwrap_or_default())]
     Call {
         /// Name of the libNVVM function that failed.
