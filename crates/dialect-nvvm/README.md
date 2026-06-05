@@ -1,76 +1,130 @@
 # dialect-nvvm
 
-A [pliron](https://github.com/vaivaswatha/pliron) dialect for NVIDIA GPU intrinsics. These operations represent hardware-specific functionality -- thread indexing, warp shuffles, barriers, tensor memory accelerator, tensor cores -- that maps directly to LLVM NVPTX intrinsics. `mir-lower` generates these ops when lowering `cuda_device` intrinsic calls, and the `llvm-export` exporter emits them as `@llvm.nvvm.*` intrinsic calls.
+A [pliron](https://github.com/vaivaswatha/pliron) dialect that models NVIDIA GPU
+intrinsics as typed IR operations. It is the bridge between Rust-level device
+abstractions (`cuda_device::thread`, `cuda_device::tma`, …) and the LLVM NVPTX
+backend that ultimately emits PTX assembly.
+
+## What is NVVM?
+
+NVVM (NVIDIA Virtual Machine) IR is NVIDIA's LLVM-IR-compatible representation
+for GPU kernels. It looks like standard LLVM IR — SSA values, basic blocks,
+`load`/`store` — but adds a namespace of GPU-specific intrinsics under
+`llvm.nvvm.*`. These intrinsics expose thread indexing, warp collectives,
+barriers, tensor-memory operations, and other hardware features that have no
+equivalent in CPU LLVM.
+
+In the cuda-oxide pipeline the flow is:
 
 ```text
-cuda_device::{thread, barrier, tma, ...}  (user-facing Rust API)
-       │
-       ▼  (mir-lower recognizes intrinsic calls)
-dialect-nvvm ops
-       │
-       ▼  (llvm-export emits LLVM IR)
-@llvm.nvvm.* intrinsic calls  →  llc  →  PTX instructions
+Rust source ──▶ rustc MIR ──▶ dialect-mir ──▶ dialect-nvvm ──▶ LLVM IR ──▶ PTX
+                                                    ↑
+                                              THIS CRATE
 ```
 
-## Operations by GPU Generation
+`mir-lower` generates `dialect-nvvm` ops when it recognises calls to
+`cuda_device` intrinsics. `llvm-export` then emits each op as either an
+`@llvm.nvvm.*` intrinsic call or an inline PTX `asm` fragment, depending on
+whether LLVM's NVPTX backend already has a first-class intrinsic for the
+operation.
 
-124 operations across 12 modules, spanning three GPU generations:
+## Operations and GPU Semantics
+
+The dialect contains **133 public items** organised by functional area and
+minimum GPU architecture. Every op is a zero-cost abstraction: it carries no
+runtime overhead beyond the instruction the hardware executes.
 
 ### Universal (all GPUs)
 
-| Module   | Ops | Highlights                                                                                         |
-|----------|-----|----------------------------------------------------------------------------------------------------|
-| `thread` | 18  | tid/ctaid/ntid/nctaid for x/y/z, env_reg{1,2}, barrier0, threadfence{,_block,_system}              |
-| `warp`   | 18  | shfl (idx/bfly/down/up, i32 and f32), lane_id, vote (all/any/ballot), match_any/match_all          |
-| `grid`   | 1   | grid_sync (cooperative kernel launches only)                                                       |
-| `debug`  | 7   | clock/clock64/globaltimer, trap, breakpoint, pm_event, vprintf                                     |
+| Module | Ops | Semantics |
+|--------|-----|-----------|
+| `thread` | 18 | Read PTX special registers (`%tid.x`, `%ctaid.x`, `%ntid.x`, …), block-wide barrier (`bar.sync 0`), memory fences (`membar.cta` / `gl` / `sys`) |
+| `warp` | 18 | Shuffle (`shfl.idx`, `shfl.bfly`, `shfl.down`, `shfl.up`), vote (`vote.all`, `vote.any`, `vote.ballot`), warp-match (`match.any`, `match.all`), lane-id query |
+| `grid` | 1 | Cooperative grid-wide sync (`grid.sync`) for multi-block cooperative launches |
+| `debug` | 7 | `clock`, `clock64`, `globaltimer`, `trap`, `breakpoint`, `pm_event`, `vprintf` |
 
 ### Volta+ (sm_70)
 
-| Module   | Ops | Highlights                                               |
-|----------|-----|----------------------------------------------------------|
-| `atomic` | 4   | Atomic load, store, RMW, cmpxchg with ordering/scope     |
+| Module | Ops | Semantics |
+|--------|-----|-----------|
+| `atomic` | 4 | Atomic load, store, RMW and compare-and-swap with explicit `AtomicOrdering` (relaxed … seq_cst) and `AtomicScope` (cta / gpu / sys) |
 
 ### Hopper+ (sm_90)
 
-| Module      | Ops | Highlights                                                                      |
-|-------------|-----|---------------------------------------------------------------------------------|
-| `cluster`   | 11  | Cluster CTA IDs, cluster sync, DSMEM (mapa_shared_cluster, dsmem_read)          |
-| `mbarrier`  | 10  | Init, arrive, arrive_expect_tx, try_wait, wait_parity, fence_proxy_async        |
-| `tma`       | 15  | 1D-5D global↔shared copies, multicast, CTA-group-2 variants, commit/wait groups |
-| `wgmma`     | 5   | Fence, commit, wait, smem descriptor, M64N64K16 bf16 MMA                        |
-| `stmatrix`  | 5   | m8n8 matrix stores (×2, ×4, transposed), f32→bf16 convert                       |
+| Module | Ops | Semantics |
+|--------|-----|-----------|
+| `cluster` | 11 | Thread-block-cluster CTA IDs, cluster sync, distributed shared memory (`mapa_shared_cluster`, `dsmem_read`) |
+| `mbarrier` | 10 | Async hardware barriers: init, arrive, arrive-expect-tx, try-wait, wait-parity, fence-proxy-async |
+| `tma` | 15 | Tensor Memory Accelerator copies: 1-D through 5-D global↔shared, multicast, CTA-group-2 variants, commit/wait groups |
+| `wgmma` | 5 | Warpgroup MMA: fence, commit, wait, shared-memory descriptor build, M64×N64×K16 `bf16` MMA |
+| `stmatrix` | 5 | Shared-memory matrix stores: `m8n8` ×2, ×4, transposed, `f32`→`bf16` convert |
 
 ### Blackwell+ (sm_100)
 
-| Module    | Ops | Highlights                                                                                                                         |
-|-----------|-----|------------------------------------------------------------------------------------------------------------------------------------|
-| `tcgen05` | 24  | TMEM alloc/dealloc, fences, MMA (f16/bf16/tf32 warpgroup and non-warpgroup), SMEM↔TMEM copies, pure loads, CTA-pair (cg2) variants |
-| `clc`     | 6   | Cluster Launch Control: try_cancel, query_is_canceled, query first ctaid per dimension                                             |
+| Module | Ops | Semantics |
+|--------|-----|-----------|
+| `tcgen05` | 24 | 5th-generation tensor cores + TMEM: alloc/dealloc, fences, MMA (`f16`/`bf16`/`tf32`, warpgroup and non-warpgroup), SMEM↔TMEM copies, pure loads, CTA-pair (`cg2`) variants |
+| `clc` | 6 | Cluster Launch Control: try-cancel, query-is-canceled, query first-ctaid per dimension |
 
-## Attributes
+## How NVVM Maps to PTX
 
-Three attributes defined for atomic operations:
+Each `dialect-nvvm` op lowers through **one of two paths**:
 
-| Attribute        | Values                                      |
-|------------------|---------------------------------------------|
-| `AtomicOrdering` | relaxed, acquire, release, acq_rel, seq_cst |
-| `AtomicScope`    | cta, gpu, sys                               |
-| `AtomicRmwKind`  | xchg, add, sub, and, or, xor, max, min      |
+### 1. LLVM NVVM Intrinsic Call
 
-## Verification
+Simple ops that have a direct LLVM intrinsic are emitted as `llvm.call`:
 
-NVVM ops use minimal structural verification -- operand and result counts are checked, but type checking is delegated to LLVM. This is intentional: NVVM ops are machine-generated by `mir-lower` (not user-written), and LLVM validates types when processing the intrinsic calls.
+```llvm
+; dialect-nvvm: ReadPtxSregTidXOp
+%tid.x = call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
 
-## Registration
+; dialect-nvvm: Barrier0Op
+call void @llvm.nvvm.barrier0()
+```
+
+LLVM's NVPTX backend recognises these intrinsics and translates them to the
+corresponding PTX instructions during code generation:
+
+```ptx
+mov.u32     %r1, %tid.x;
+bar.sync    0;
+```
+
+### 2. Inline PTX Assembly
+
+Complex ops — especially those introduced in recent GPU generations that LLVM
+does not yet expose as intrinsics — are emitted as inline `asm` fragments:
+
+```llvm
+; wgmma.mma_async (Hopper)
+call void asm sideeffect "wgmma.mma_async ...", "..."(...)
+
+; tcgen05.mma (Blackwell)
+call void asm sideeffect "tcgen05.mma ...", "..."(...)
+```
+
+This gives cuda-oxide access to bleeding-edge hardware instructions without
+waiting for upstream LLVM support. The inline-asm path is used for `wgmma`,
+`tcgen05`, and some TMA variants.
+
+## Intrinsic Functions Exposed
+
+The crate exposes its ops through a single `register` entry point:
 
 ```rust
 use pliron::context::Context;
 use dialect_nvvm::register;
 
 let mut ctx = Context::new();
-register(&mut ctx);
+register(&mut ctx);   // registers the "nvvm" dialect and all ops
 ```
+
+Each op implements pliron's `Op` and `Verify` traits. Verification is
+**structural, not semantic**: we check operand/result counts and (for some
+ops) that results are `i32`, but we deliberately do not replicate LLVM's type
+system. The ops are machine-generated by `mir-lower`, not written by hand, so
+type errors are caught by rustc long before they reach this dialect. LLVM
+itself validates the intrinsic types when the `.ll` file is processed.
 
 ## Source Layout
 
@@ -78,7 +132,7 @@ register(&mut ctx);
 src/
 ├── lib.rs          # Dialect registration
 └── ops/
-    ├── mod.rs       # Op module registry + architecture table
+    ├── mod.rs       # Op registry + architecture table
     ├── thread.rs    # Thread/block indexing, barrier0, threadfences
     ├── warp.rs      # Shuffle, vote, match operations
     ├── grid.rs      # Cooperative grid_sync
@@ -95,7 +149,7 @@ src/
 
 ## Further Reading
 
-- [`dialect-mir`](../dialect-mir/) -- pliron dialect modelling Rust MIR (lowering source)
-- [`llvm-export`](../llvm-export/) -- pliron-llvm shim + textual `.ll` exporter (lowering target)
-- [`mir-lower`](../mir-lower/) -- generates `dialect-nvvm` ops during lowering
-- [`cuda-device`](../cuda-device/) -- user-facing intrinsics that map to `dialect-nvvm` ops
+- [`dialect-mir`](../dialect-mir/) — pliron dialect modelling Rust MIR (lowering source)
+- [`mir-lower`](../mir-lower/) — generates `dialect-nvvm` ops during lowering
+- [`llvm-export`](../llvm-export/) — pliron-llvm shim + textual `.ll` exporter (lowering target)
+- [`cuda-device`](../cuda-device/) — user-facing intrinsics that map to `dialect-nvvm` ops
