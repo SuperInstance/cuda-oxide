@@ -1,8 +1,7 @@
 <p align="center">
-  <a href="https://github.com/NVlabs/cuda-oxide/actions/workflows/clippy.yml"><img alt="clippy" src="https://github.com/NVlabs/cuda-oxide/actions/workflows/clippy.yml/badge.svg?branch=main"></a>
-  <a href="https://github.com/NVlabs/cuda-oxide/actions/workflows/unit-tests.yml"><img alt="unit-tests" src="https://github.com/NVlabs/cuda-oxide/actions/workflows/unit-tests.yml/badge.svg?branch=main"></a>
-  <a href="https://github.com/NVlabs/cuda-oxide/actions/workflows/cargo-deny.yml"><img alt="cargo-deny" src="https://github.com/NVlabs/cuda-oxide/actions/workflows/cargo-deny.yml/badge.svg?branch=main"></a>
-  <a href="https://github.com/NVlabs/cuda-oxide/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/NVlabs/cuda-oxide/actions/workflows/codeql.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/SuperInstance/cuda-oxide/actions/workflows/clippy.yml"><img alt="clippy" src="https://github.com/SuperInstance/cuda-oxide/actions/workflows/clippy.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/SuperInstance/cuda-oxide/actions/workflows/unit-tests.yml"><img alt="unit-tests" src="https://github.com/SuperInstance/cuda-oxide/actions/workflows/unit-tests.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/SuperInstance/cuda-oxide/actions/workflows/cargo-deny.yml"><img alt="cargo-deny" src="https://github.com/SuperInstance/cuda-oxide/actions/workflows/cargo-deny.yml/badge.svg?branch=main"></a>
   <br>
   <img src="assets/logo.png" alt="cuda-oxide logo" width="100%">
 </p>
@@ -17,6 +16,143 @@ The workspace combines:
 - device-side abstractions (type-safe indexing, shared memory, scoped atomics, barriers, TMA, warp/cluster ops)
 - a host-side runtime for memory management, pinned host transfers, and kernel launching (`cuda-core`, `cuda-async`)
 - a rust-native compilation pipeline using [Pliron](https://github.com/vaivaswatha/pliron), an MLIR-like IR framework in Rust (Rust → Rust MIR → Pliron IR → LLVM IR → PTX)
+
+## SuperInstance Fork
+
+> This repository is **SuperInstance's fork** of the original [`NVlabs/cuda-oxide`](https://github.com/NVlabs/cuda-oxide) project.
+>
+> SuperInstance adopted cuda-oxide for **systems-level GPU development** — pushing the compiler beyond research demos into production-grade tooling for high-performance computing, agent runtimes, and bare-metal GPU orchestration. The fork maintains upstream compatibility while expanding architecture documentation, crate-level modularity, and long-term stability for systems workloads.
+>
+> **What changes in this fork:**
+> - Comprehensive architecture documentation (`ARCHITECTURE.md`, `PIPELINE.md`) treating the 18-crate workspace as a compiler construction kit
+> - Systems-focused runtime hardening (`cuda-core`, `cuda-async`) for async agent pipelines and memory-virtualization workloads
+> - Crate-level READMEs for every workspace member, enabling selective reuse of individual pipeline stages
+> - Fork-specific issue tracking and CI under the `SuperInstance` GitHub org
+
+## Architecture Overview
+
+The workspace is structured as **18 crates** across four layers:
+
+| Layer | Crates | Purpose |
+|-------|--------|---------|
+| **Compiler backend** | `rustc-codegen-cuda`, `mir-importer`, `mir-lower`, `dialect-mir`, `dialect-nvvm`, `llvm-export` | Rust MIR → Pliron IR → LLVM IR → PTX |
+| **Host runtime** | `cuda-core`, `cuda-host`, `cuda-async`, `cuda-bindings`, `libnvvm-sys`, `nvjitlink-sys` | Contexts, streams, buffers, async launches, LTOIR linking |
+| **Device runtime** | `cuda-device`, `cuda-macros` | `#[kernel]`, `#[cuda_module]`, GPU intrinsics |
+| **Build & infra** | `cargo-oxide`, `oxide-artifacts`, `reserved-oxide-symbols`, `fuzzer` | Cargo subcommand, embedded artifacts, differential fuzzing |
+
+### Full Compilation Pipeline
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          RUST SOURCE (.rs)                                   │
+│  #[cuda_module] mod kernels { #[kernel] fn add(...) { ... } }               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  rustc-codegen-cuda  ──  Custom rustc codegen backend (dylib)               │
+│  • Splits host code → standard LLVM backend                                 │
+│  • Extracts Stable MIR for #[kernel] fns → mir-importer                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                    ┌──────────────────┴──────────────────┐
+                    │                                     │
+                    ▼                                     ▼
+┌─────────────────────────────────┐   ┌─────────────────────────────────────┐
+│  HOST PATH (standard LLVM)      │   │  DEVICE PATH (cuda-oxide pipeline)  │
+│  Host binary + embedded artifact│   │                                     │
+└─────────────────────────────────┘   └─────────────────────────────────────┘
+                                                    │
+                    ┌───────────────────────────────┼───────────────────────────────┐
+                    │                               │                               │
+                    ▼                               ▼                               ▼
+┌──────────────────────────┐  ┌──────────────────────────┐  ┌──────────────────────────┐
+│   mir-importer           │  │   dialect-mir            │  │   dialect-nvvm           │
+│   Rust MIR → dialect-mir │  │   Pliron MIR dialect     │  │   Pliron NVVM dialect    │
+│   • translate_body()     │  │   • alloca/load/store    │  │   • thread/warp/atomic   │
+│   • mem2reg (SSA promo)  │  │   • arithmetic, casts    │  │   • tma, wgmma, tcgen05  │
+│   • verify_operation()   │  │   • enums, structs       │  │   • cluster, mbarrier    │
+└──────────────────────────┘  └──────────────────────────┘  └──────────────────────────┘
+                    │                               │                               │
+                    └───────────────────────────────┼───────────────────────────────┘
+                                                    │
+                                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  mir-lower  ──  DialectConversion pass: dialect-mir → LLVM dialect           │
+│  • flatten slice/struct args                                                │
+│  • GPU intrinsics → NVVM calls / inline PTX asm                             │
+│  • entry-block prologue reconstruction                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  llvm-export  ──  LLVM dialect → textual .ll (NVPTX)                         │
+│  • datalayout + target triple                                               │
+│  • block args → PHI nodes                                                   │
+│  • @llvm.used + !nvvm.annotations                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  llc (LLVM 21+, -march=nvptx64)  ──  textual PTX assembly                   │
+│  • Auto-detected SM target (sm_80 / sm_90 / sm_90a / sm_100a)               │
+│  • Override: CUDA_OXIDE_TARGET=sm_100a                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HOST BINARY  ──  oxide-artifacts embeds PTX → cuModuleLoad at runtime      │
+│  • cuda-host generates typed module.map::<T, _>(...) launchers              │
+│  • cuda-async provides DeviceOperation / DeviceFuture for composable GPU    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+For a step-by-step walkthrough of each compiler stage, see [`PIPELINE.md`](PIPELINE.md).
+For deep-dive architecture docs (runtime, IR design, build system, data flow), see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## Crate Reference
+
+All 18 workspace crates with line counts and maturity status.
+
+### Compiler Crates
+
+| Crate | Role | LOC | Status |
+|-------|------|-----|--------|
+| [`rustc-codegen-cuda`](crates/rustc-codegen-cuda/README.md) | Custom rustc backend (dylib) — host/device split | ~2.7K | ✅ Active |
+| [`mir-importer`](crates/mir-importer/README.md) | Rust MIR → `dialect-mir` translator + mem2reg + verify | ~23.9K | ✅ Active |
+| [`mir-lower`](crates/mir-lower/README.md) | `dialect-mir` → LLVM dialect lowering (DialectConversion) | ~13.4K | ✅ Active |
+| [`dialect-mir`](crates/dialect-mir/README.md) | Pliron dialect modelling Rust MIR semantics | ~6.1K | ✅ Active |
+| [`dialect-nvvm`](crates/dialect-nvvm/README.md) | Pliron dialect modelling NVVM GPU intrinsics | ~5.5K | ✅ Active |
+| [`llvm-export`](crates/llvm-export/README.md) | Pliron-LLVM shim + textual `.ll` exporter | ~3.0K | ✅ Active |
+
+### Host Runtime Crates
+
+| Crate | Role | LOC | Status |
+|-------|------|-----|--------|
+| [`cuda-core`](crates/cuda-core/README.md) | Safe RAII wrappers (`CudaContext`, `DeviceBuffer<T>`, streams) | ~3.3K | ✅ Active |
+| [`cuda-host`](crates/cuda-host/README.md) | Typed module loading, launch helpers, LTOIR loader | ~1.7K | ✅ Active |
+| [`cuda-async`](crates/cuda-async/README.md) | Async execution layer (`DeviceOperation`, `DeviceFuture`) | ~2.5K | ✅ Active |
+| [`cuda-bindings`](crates/cuda-bindings/README.md) | Raw `bindgen` FFI to `cuda.h` | ~0.1K | ✅ Active |
+| [`libnvvm-sys`](crates/libnvvm-sys/README.md) | Runtime `dlopen` bindings to libNVVM | ~0.4K | ✅ Active |
+| [`nvjitlink-sys`](crates/nvjitlink-sys/README.md) | Runtime `dlopen` bindings to nvJitLink | ~0.5K | ✅ Active |
+
+### Device Runtime Crates
+
+| Crate | Role | LOC | Status |
+|-------|------|-----|--------|
+| [`cuda-device`](crates/cuda-device/README.md) | `#![no_std]` GPU intrinsics (thread, warp, TMA, atomics, tcgen05) | ~9.8K | ✅ Active |
+| [`cuda-macros`](crates/cuda-macros/README.md) | Proc macros (`#[kernel]`, `#[cuda_module]`, `gpu_printf!`) | ~4.1K | ✅ Active |
+
+### Build & Infrastructure Crates
+
+| Crate | Role | LOC | Status |
+|-------|------|-----|--------|
+| [`cargo-oxide`](crates/cargo-oxide/README.md) | Cargo subcommand (`cargo oxide run`, `build`, `debug`, `pipeline`) | ~2.4K | ✅ Active |
+| [`oxide-artifacts`](crates/oxide-artifacts/README.md) | Embedded device-artifact container format | ~0.9K | ✅ Active |
+| [`reserved-oxide-symbols`](crates/reserved-oxide-symbols/README.md) | Internal naming contract between macros and runtime | ~0.5K | 🔒 Internal |
+| [`fuzzer`](crates/fuzzer/README.md) | Differential codegen fuzzer (rustlantis adapter) | ~0.3K | 🧪 Experimental |
+
+**Total workspace Rust:** ~59K lines (excluding examples and tests).
 
 ## Project Status
 
@@ -131,7 +267,7 @@ Inside the cuda-oxide repo, `cargo oxide` works out of the box via a workspace a
 For use outside the repo (your own projects), install it with the pinned nightly toolchain:
 
 ```bash
-cargo +nightly-2026-04-03 install --git https://github.com/NVlabs/cuda-oxide.git cargo-oxide
+cargo +nightly-2026-04-03 install --git https://github.com/SuperInstance/cuda-oxide.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend.
@@ -142,7 +278,7 @@ If you have Nix with flakes enabled, `nix develop` in the repo gives you a repro
 
 ```bash
 nix develop                                       # full dev shell in this repo
-nix run github:NVlabs/cuda-oxide#new my-project   # bootstrap a project
+nix run github:SuperInstance/cuda-oxide#new my-project   # bootstrap a project
 ```
 
 #### Rust
@@ -246,44 +382,6 @@ cargo oxide run vecadd
 cargo oxide run gemm_sol
 ```
 
-## Crate Overview
-
-### User-Facing Crates
-
-| Crate               | Description                                                               |
-|---------------------|---------------------------------------------------------------------------|
-| `cuda-device`       | Device intrinsics (`thread::*`, `warp::*`, barriers)                      |
-| `cuda-host`         | Typed module loading, launch helpers, LTOIR loader                        |
-| `cuda-macros`       | Proc macros (`#[cuda_module]`, `#[kernel]`, `gpu_printf!`)                |
-| `cuda-bindings`     | Raw `bindgen` FFI bindings to `cuda.h`                                    |
-| `cuda-core`         | Safe RAII wrappers (`CudaContext`, `CudaStream`, `DeviceBuffer<T>`, ...)  |
-| `cuda-async`        | Async execution layer (`DeviceOperation`, `DeviceFuture`, `DeviceBox<T>`) |
-| `libnvvm-sys`       | `dlopen` bindings to libNVVM (used by `cuda-host::ltoir`)                 |
-| `nvjitlink-sys`     | `dlopen` bindings to nvJitLink (used by `cuda-host::ltoir`)               |
-
-### Compiler Crates
-
-| Crate                | Description                                           |
-|----------------------|-------------------------------------------------------|
-| `rustc-codegen-cuda` | Custom rustc backend                                  |
-| `mir-importer`       | Rust MIR -> `dialect-mir` translation + pipeline      |
-| `mir-lower`          | `dialect-mir` -> LLVM dialect lowering                |
-| `dialect-mir`        | pliron dialect modelling Rust MIR                     |
-| `llvm-export`        | pliron-llvm shim + textual `.ll` exporter             |
-| `dialect-nvvm`       | pliron dialect modelling NVVM intrinsics              |
-
-### Build Tooling
-
-| Crate          | Description                                          |
-|----------------|------------------------------------------------------|
-| `cargo-oxide`  | Cargo subcommand (`cargo oxide run`, etc.)           |
-
-### Documentation
-
-| Directory           | Description                                                        |
-|---------------------|--------------------------------------------------------------------|
-| `cuda-oxide-book`   | Project book (Sphinx + MyST) — guides, compiler internals, API ref |
-
 ## Status
 
 ### Highlights:
@@ -307,6 +405,23 @@ cargo oxide run gemm_sol
 **WIP:** 🚧 The **[cuda-oxide book](https://nvlabs.github.io/cuda-oxide/)** is the primary reference for the project. It covers SIMT kernel authoring in Rust, synchronous and asynchronous GPU programming, the compiler architecture, and more.
 
 To build and serve the book locally, see [cuda-oxide-book/README.md](./cuda-oxide-book/README.md).
+
+For fork-specific architecture deep-dives, see:
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — workspace composition, runtime architecture, IR dialect design, data flow
+- [`PIPELINE.md`](PIPELINE.md) — step-by-step compiler pipeline walkthrough
+
+## Contributing to the Fork
+
+We welcome contributions that align with SuperInstance's systems-level focus:
+
+1. **Compiler robustness** — bug fixes, additional MIR coverage, lowering correctness
+2. **Runtime hardening** — `cuda-core` safety comments, `cuda-async` scheduler improvements, VMM APIs
+3. **Documentation** — crate READMEs, architecture diagrams, example tutorials
+4. **Systems integration** — agent runtime bindings, memory-virtualization hooks, bare-metal orchestration
+
+Please open issues and PRs against **this fork** (`SuperInstance/cuda-oxide`). For upstream changes that should also land in NVlabs/cuda-oxide, we will coordinate back-porting.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for coding standards, commit conventions, and the PR checklist.
 
 ## Ecosystem
 

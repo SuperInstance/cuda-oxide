@@ -1,171 +1,138 @@
 # oxide-artifacts
 
 `oxide-artifacts` defines the embedded device-artifact container used by
-`cuda-oxide`.
+cuda-oxide to bundle compiled GPU code into host binaries.
 
-The crate is deliberately accelerator-neutral. It knows how to describe bundles
-of generated device-code payloads, but it does not know how to compile or
-launch them. Runtime crates can parse bundles and decide whether they can
-consume them.
-
-`oxide-artifacts` also does not decide target policy. Choices such as PTX versus
-LTOIR, cubin versus fatbin, or single-arch versus multi-arch packaging belong to
-the compiler and runtime loader layers. The container only records the payloads
-and entry metadata it is given, so higher-level launch APIs can stay stable as
+The crate is deliberately **accelerator-neutral**. It knows how to describe
+bundles of generated device-code payloads, but it does not know how to
+compile or launch them. Runtime crates can parse bundles and decide whether
+they can consume them. Choices such as PTX versus LTOIR, cubin versus
+fatbin, or single-arch versus multi-arch packaging belong to the compiler
+and runtime loader layers. The container only records the payloads and
+entry metadata it is given, so higher-level launch APIs can stay stable as
 the payload strategy evolves.
 
-## Design
+## How Compiled GPU Kernels Are Embedded in Host Binaries
 
-An artifact bundle is a small binary blob stored in a retained host-object
-section named `.oxart`.
+When `rustc-codegen-cuda` compiles device code, it produces a blob of GPU
+machine code (PTX, NVVM IR, LTOIR, or cubin). That blob cannot stand alone:
+it must travel with the host binary so that the runtime can load it at
+program startup. `oxide-artifacts` provides the packing, object-file
+wrapping, and extraction machinery.
 
-Each bundle contains:
-
-- a bundle name, normally the producing Rust crate name
-- a device target string, such as `sm_90`
-- zero or more entry records, such as CUDA kernels
-- one or more payload records, such as generated PTX, cubin, or IR bytes
-
-Multiple bundle blobs may be concatenated in the same section. Parsers walk the
-section by reading each blob's `total_len` field.
-
-The section-object writer is behind the `object-write` feature and uses the
-Rust `object` crate rather than hand-writing ELF. That keeps the common
-infrastructure portable across the CUDA host platforms this crate supports
-today: Linux on AMD64 and ARM64.
-
-## Wire Format
-
-All integer fields are little-endian. Offsets are relative to the start of the
-bundle blob, not the host object file or section.
+### The Embedding Pipeline
 
 ```text
-Artifact Blob
-
-  0                   1                   2                   3
-  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Magic "OXIDEART"                      |
- |                                                               |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |          Version              |         Header Length         |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Total Length                          |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |        Name Length            |        Target Length          |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |       Payload Count           |        Entry Count            |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Reserved (zero)                       |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Bundle Name ...                      /
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Target String ...                    /
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Payload Records ...                  /
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Entry Records ...                    /
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Payload Names/Data and Entry Symbols  /
- |                         (each variable item is 8-byte aligned)/
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+Device codegen (rustc-codegen-cuda)
+       │
+       ├──▶ PTX bytes, NVVM IR bytes, LTOIR bytes, or cubin bytes
+       │
+       ▼
+ oxide-artifacts::build_artifact_blob()
+       │
+       ├──▶ ArtifactBundle { name, target, payloads[], entries[] }
+       │
+       ▼
+ oxide-artifacts::build_host_object_for_target()
+       │
+       ├──▶ ELF relocatable object with `.oxart` section
+       │
+       ▼
+ rustc links the object into the host binary
+       │
+       ▼
+ At runtime: cuda-host reads `.oxart` from the executable's sections
 ```
 
-Header size is currently 32 bytes.
+The `.oxart` section is marked with `SHF_ALLOC | SHF_GNU_RETAIN` so that the
+linker preserves it even if no host symbol references it directly.
+
+## Artifact Bundles, Sections, and Discovery
+
+### Wire Format
+
+An artifact bundle is a small binary blob with a fixed 32-byte header:
 
 ```text
-Payload Record (24 bytes)
-
-  0                   1                   2                   3
-  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |       Payload Kind            |          Flags (zero)         |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Data Offset                           |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Data Length                           |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Name Offset                           |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |        Name Length            |          Reserved             |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Reserved                              |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Magic "OXIDEART"                      |
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Version (1)          |         Header Length (32)    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Total Length                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|        Name Length            |        Target Length          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|       Payload Count           |        Entry Count            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Reserved (zero)                       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Bundle Name  |  Target String  |  Payload Records  |  Entries  |
 ```
 
-Payload kind values:
+All integer fields are little-endian. Offsets are relative to the start of
+the bundle blob, not the host object file or section.
 
-- `0x0100`: PTX
-- `0x0110`: NVVM IR
-- `0x0120`: LTOIR
-- `0x0200`: cubin
+Multiple bundle blobs may be concatenated in the same `.oxart` section.
+Parsers walk the section by reading each blob's `total_len` field, so
+kernels from different crates (or different GPU architectures) can coexist.
 
-```text
-Entry Record (24 bytes)
+### Payload Records
 
-  0                   1                   2                   3
-  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |         Entry Kind            |             Flags             |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Metadata                              |
- |                                                               |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Symbol Offset                         |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |       Symbol Length           |          Reserved             |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |                         Reserved                              |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-```
+Each payload record describes one compiled artifact:
 
-Entry kind values:
+| Kind | Value | Typical use |
+|------|-------|-------------|
+| PTX | `0x0100` | Textual PTX assembly, loaded via `cuModuleLoadData` |
+| NVVM IR | `0x0110` | LLVM-IR dialect for libNVVM compilation |
+| LTOIR | `0x0120` | Linked-time optimization IR for nvJitLink |
+| cubin | `0x0200` | Binary GPU machine code, loaded directly |
 
-- `1`: kernel
-- `2`: device function
+### Entry Records
 
-If bit 0 of `Flags` is set, `Metadata` is present and interpreted by the
-consumer for that entry kind. No metadata interpretation is currently required
-for PTX kernel loading.
+Each entry record names a kernel or device function inside the payload:
 
-## Object Storage
+| Kind | Value | Meaning |
+|------|-------|---------|
+| Kernel | `1` | `.entry` function, launchable from host |
+| Device function | `2` | `.func` helper, callable only from device |
 
-When `object-write` is enabled, `build_host_object_for_target` creates a
-relocatable object with a single `.oxart` data section.
+The entry symbol string is the exact name used in PTX (e.g. `vecadd` or
+`map_TID_…`). The host runtime matches these against the typed launch
+methods generated by `#[cuda_module]`.
 
-The writer marks the ELF section as retained with
-`SHF_ALLOC | SHF_GNU_RETAIN`.
+### Object-File Writer
 
-The rustc CUDA backend writes the generated device artifact into one bundle
-blob, emits a host object for the current host target, and appends that object
-to rustc's compiled module list before linking. At runtime, `cuda-host` can read
-the executable's object sections and load PTX/cubin payloads directly or build a
-cubin from embedded NVVM IR/LTOIR before loading.
+When the `object-write` feature is enabled, `build_host_object_for_target`
+creates a relocatable ELF object (x86_64-linux or aarch64-linux) containing
+a single `.oxart` data section. The writer uses the Rust `object` crate
+rather than hand-writing bytes, which keeps the code portable and safe.
 
-## Constraints
+### Runtime Discovery
 
-- The format version is currently `1`.
-- All numeric fields are little-endian.
-- The blob header is fixed at 32 bytes.
-- Payload and entry records are fixed at 24 bytes each.
-- String and payload offsets are 32-bit, so a single blob must fit in `u32::MAX`
-  bytes.
-- String lengths and record counts are 16-bit.
-- Bundle names, target strings, payload names, and entry symbols must be UTF-8.
-- Payloads must be non-empty.
-- Unknown payload or entry kind values are rejected by the current parser.
-- Compression is not part of the current wire format.
+When the `object-read` feature is enabled, `read_artifact_bundles_from_object_bytes`
+parses a host executable or shared library and returns every bundle found in
+any `.oxart` section. The runtime then:
+
+1. Selects the bundle whose target matches the current GPU.
+2. Chooses the best payload kind (cubin preferred, then PTX, then LTOIR).
+3. Loads it via the CUDA driver (`cuModuleLoadData`, `cuModuleLoadDataEx`,
+   or nvJitLink for LTOIR).
 
 ## Feature Flags
 
 - `object-read`: parse artifact bundles out of host object/executable bytes.
-- `object-write`: emit host relocatable objects with an `.oxart`
-  section.
+- `object-write`: emit host relocatable objects with an `.oxart` section.
 - `object`: enables both read and write support.
 
-## TODO
+## Constraints
 
-- Investigate whether compression is useful or necessary for embedded payloads,
-  especially for large PTX bundles, and whether it belongs in this crate
-  or in a higher-level packaging layer.
-- Consider Windows support later.
+- Format version is currently `1`.
+- A single blob must fit in `u32::MAX` bytes.
+- Bundle names, target strings, payload names, and entry symbols must be
+  valid UTF-8.
+- Unknown payload or entry kind values are rejected by the current parser.
+- Compression is not part of the current wire format.
