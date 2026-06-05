@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Procedural macros for defining CUDA kernels in Rust.
 //!
 //! This crate provides two key macros:

@@ -43,12 +43,25 @@
 //! The `mem2reg` pass in [`crate::pipeline`] promotes the scalar slots back
 //! into SSA before the `dialect-mir` → LLVM dialect lowering runs.
 
+/// Translation of a single MIR basic block's statements and terminator.
 pub mod block;
+
+/// Function-level translation: signatures, blocks, alloca setup, kernel attrs.
 pub mod body;
+
+/// Translation of MIR rvalues (expressions): binops, casts, aggregates, constants.
 pub mod rvalue;
+
+/// Translation of MIR statements: assignments, storage markers, projections.
 pub mod statement;
+
+/// Translation of MIR terminators: control flow, calls, GPU intrinsic dispatch.
 pub mod terminator;
+
+/// Rust type → `dialect-mir` type conversion.
 pub mod types;
+
+/// MIR local → alloca slot mapping and GPU address-space inference.
 pub mod values;
 
 use crate::error::{TranslationErr, TranslationResult};

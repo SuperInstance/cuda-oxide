@@ -39,7 +39,14 @@ use pliron::r#type::TypeObj;
 use pliron::{input_err_noloc, input_error_noloc};
 use rustc_public::CrateDef;
 
-// Re-export types from dialect_mir for convenience
+/// Re-exported `dialect-mir` types used by the translator.
+///
+/// These are the Pliron-side types produced by [`translate_type`]:
+/// - [`MirPtrType`] — generic or address-space-qualified pointer
+/// - [`MirTupleType`] — Rust tuple representation
+/// - [`MirSliceType`] — dynamically-sized slice
+/// - [`MirEnumType`] / [`EnumVariant`] — Rust enum with variants
+/// - [`MirDisjointSliceType`] — `cuda_device::DisjointSlice<T>`
 pub use dialect_mir::types::{
     EnumVariant, MirDisjointSliceType, MirEnumType, MirPtrType, MirSliceType, MirTupleType,
 };

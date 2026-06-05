@@ -35,17 +35,45 @@
 //! functions to their respective category modules.
 
 // Submodules for intrinsic categories (to be populated incrementally)
+
+/// `std::intrinsics::atomic_*` and `core::sync::atomic` operations.
 pub mod atomic;
+
+/// `core::intrinsics::bit_*` and `ctlz`/`cttz`/`popcount` operations.
 pub mod bitops;
+
+/// Cooperative-launch grid-level collective operations.
 pub mod clc;
+
+/// Thread-block cluster intrinsics (`cluster_ctaid_*`, `cluster_sync`, …).
 pub mod cluster;
+
+/// Debug intrinsics: `prof_trigger`, `vprintf`, `trap`, `breakpoint`, clocks.
 pub mod debug;
+
+/// Rust float math intrinsics (`sin`, `cos`, `exp`, `pow`, …) → `__nv_*` libdevice calls.
 pub mod float_math;
+
+/// Thread/block indexing intrinsics (`threadIdx_*`, `blockIdx_*`, `index_1d`, `index_2d`).
 pub mod indexing;
+
+/// Shared-memory and pointer intrinsics (`SharedArray`, `DynamicSharedArray`, `stmatrix`).
 pub mod memory;
+
+/// Saturating arithmetic intrinsics (`saturating_add`, `saturating_sub`).
 pub mod saturating;
+
+/// Synchronization intrinsics (`sync_threads`, `mbarrier_*`, `fence_*`).
 pub mod sync;
+
+/// Blackwell tcgen05 tensor-core operations (TMEM, MMA, commit, cp).
 pub mod tcgen05;
+
+/// Tensor Memory Access (TMA) bulk-copy intrinsics.
 pub mod tma;
+
+/// Warp-level primitives (`shfl_*`, `vote_*`, `lane_id`).
 pub mod warp;
+
+/// Hopper WGMMA (warpgroup MMA) matrix-multiply intrinsics.
 pub mod wgmma;

@@ -54,7 +54,10 @@
 //!   - `tma`: Tensor memory access
 //!   - `memory`: SharedArray indexing, stmatrix
 
+/// Shared utilities for terminator emission (gotos, calls, NVVM wrappers).
 pub mod helpers;
+
+/// GPU intrinsic dispatch: `cuda_device` calls → `dialect-nvvm` operations.
 pub mod intrinsics;
 
 use super::types;
