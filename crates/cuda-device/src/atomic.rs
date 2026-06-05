@@ -192,6 +192,14 @@ macro_rules! define_integer_atomic {
             /// Atomically load the value.
             ///
             /// `order` must be `Relaxed`, `Acquire`, or `SeqCst`.
+            ///
+            /// Hardware mapping: LLVM `load atomic` scoped to the type's
+            /// CUDA scope (`DeviceAtomic*` ⇒ `.gpu`, `BlockAtomic*` ⇒
+            /// `.cta`, `SystemAtomic*` ⇒ `.sys`). Lowered to PTX
+            /// `ld.{relaxed|acquire|sc}.{scope}.b32/b64`. `Acquire`
+            /// prevents later memory operations from being reordered
+            /// before this load; `SeqCst` additionally provides a single
+            /// total order with other `SeqCst` operations.
             #[inline(never)]
             pub fn load(&self, order: AtomicOrdering) -> $ty {
                 let _ = order;
@@ -201,6 +209,12 @@ macro_rules! define_integer_atomic {
             /// Atomically store a value.
             ///
             /// `order` must be `Relaxed`, `Release`, or `SeqCst`.
+            ///
+            /// Hardware mapping: LLVM `store atomic` scoped to the type's
+            /// CUDA scope. Lowered to PTX
+            /// `st.{relaxed|release|sc}.{scope}.b32/b64`. `Release`
+            /// ensures all prior memory operations are visible before
+            /// the store; `SeqCst` is the strongest ordering.
             #[inline(never)]
             pub fn store(&self, val: $ty, order: AtomicOrdering) {
                 let _ = (val, order);
@@ -210,6 +224,11 @@ macro_rules! define_integer_atomic {
             // ── Arithmetic RMW ─────────────────────────────────────────
 
             /// Atomically add `val` and return the **previous** value.
+            ///
+            /// Hardware mapping: PTX `atom.add.{scope}.{s32|u32|s64|u64}`
+            /// (e.g. `atom.add.gpu.s32` for `DeviceAtomicI32`), LLVM
+            /// `atomicrmw add`. The RMW is atomic at the type's scope
+            /// and obeys the supplied ordering.
             #[inline(never)]
             pub fn fetch_add(&self, val: $ty, order: AtomicOrdering) -> $ty {
                 let _ = (val, order);
@@ -217,6 +236,10 @@ macro_rules! define_integer_atomic {
             }
 
             /// Atomically subtract `val` and return the **previous** value.
+            ///
+            /// Hardware mapping: PTX `atom.sub.{scope}.{s32|u32|s64|u64}`,
+            /// LLVM `atomicrmw sub`. The RMW is atomic at the type's
+            /// scope and obeys the supplied ordering.
             #[inline(never)]
             pub fn fetch_sub(&self, val: $ty, order: AtomicOrdering) -> $ty {
                 let _ = (val, order);
@@ -226,6 +249,10 @@ macro_rules! define_integer_atomic {
             // ── Bitwise RMW ────────────────────────────────────────────
 
             /// Atomically bitwise-AND with `val` and return the **previous** value.
+            ///
+            /// Hardware mapping: PTX `atom.and.{scope}.b32/b64`, LLVM
+            /// `atomicrmw and`. The RMW is atomic at the type's scope
+            /// and obeys the supplied ordering.
             #[inline(never)]
             pub fn fetch_and(&self, val: $ty, order: AtomicOrdering) -> $ty {
                 let _ = (val, order);
@@ -233,6 +260,10 @@ macro_rules! define_integer_atomic {
             }
 
             /// Atomically bitwise-OR with `val` and return the **previous** value.
+            ///
+            /// Hardware mapping: PTX `atom.or.{scope}.b32/b64`, LLVM
+            /// `atomicrmw or`. The RMW is atomic at the type's scope
+            /// and obeys the supplied ordering.
             #[inline(never)]
             pub fn fetch_or(&self, val: $ty, order: AtomicOrdering) -> $ty {
                 let _ = (val, order);
@@ -240,6 +271,10 @@ macro_rules! define_integer_atomic {
             }
 
             /// Atomically bitwise-XOR with `val` and return the **previous** value.
+            ///
+            /// Hardware mapping: PTX `atom.xor.{scope}.b32/b64`, LLVM
+            /// `atomicrmw xor`. The RMW is atomic at the type's scope
+            /// and obeys the supplied ordering.
             #[inline(never)]
             pub fn fetch_xor(&self, val: $ty, order: AtomicOrdering) -> $ty {
                 let _ = (val, order);
@@ -249,6 +284,10 @@ macro_rules! define_integer_atomic {
             // ── Comparison RMW ─────────────────────────────────────────
 
             /// Atomically compute the minimum and return the **previous** value.
+            ///
+            /// Hardware mapping: PTX `atom.min.{scope}.{s32|u32|s64|u64}`,
+            /// LLVM `atomicrmw min`. The RMW is atomic at the type's
+            /// scope and obeys the supplied ordering.
             #[inline(never)]
             pub fn fetch_min(&self, val: $ty, order: AtomicOrdering) -> $ty {
                 let _ = (val, order);
@@ -256,6 +295,10 @@ macro_rules! define_integer_atomic {
             }
 
             /// Atomically compute the maximum and return the **previous** value.
+            ///
+            /// Hardware mapping: PTX `atom.max.{scope}.{s32|u32|s64|u64}`,
+            /// LLVM `atomicrmw max`. The RMW is atomic at the type's
+            /// scope and obeys the supplied ordering.
             #[inline(never)]
             pub fn fetch_max(&self, val: $ty, order: AtomicOrdering) -> $ty {
                 let _ = (val, order);
@@ -265,6 +308,10 @@ macro_rules! define_integer_atomic {
             // ── Exchange ───────────────────────────────────────────────
 
             /// Atomically swap with `val` and return the **previous** value.
+            ///
+            /// Hardware mapping: PTX `atom.exch.{scope}.b32/b64`, LLVM
+            /// `atomicrmw xchg`. The exchange is atomic at the type's
+            /// scope and obeys the supplied ordering.
             #[inline(never)]
             pub fn swap(&self, val: $ty, order: AtomicOrdering) -> $ty {
                 let _ = (val, order);
@@ -298,6 +345,12 @@ macro_rules! define_integer_atomic {
             ///
             /// `success` is the ordering for the RMW if the comparison succeeds.
             /// `failure` is the ordering for the load if the comparison fails.
+            ///
+            /// Hardware mapping: PTX `atom.cas.{scope}.b32/b64` or LLVM
+            /// `cmpxchg`. The success ordering applies to the RMW; the
+            /// failure ordering applies to the load that returns the
+            /// actual value. Both orderings are combined with the type's
+            /// scope (`.gpu`/`.cta`/`.sys`).
             #[inline(always)]
             pub fn compare_exchange(
                 &self,
@@ -378,6 +431,14 @@ macro_rules! define_float_atomic {
             /// Atomically load the value.
             ///
             /// `order` must be `Relaxed`, `Acquire`, or `SeqCst`.
+            ///
+            /// Hardware mapping: LLVM `load atomic` scoped to the type's
+            /// CUDA scope (`DeviceAtomic*` ⇒ `.gpu`, `BlockAtomic*` ⇒
+            /// `.cta`, `SystemAtomic*` ⇒ `.sys`). Lowered to PTX
+            /// `ld.{relaxed|acquire|sc}.{scope}.b32/b64`. `Acquire`
+            /// prevents later memory operations from being reordered
+            /// before this load; `SeqCst` additionally provides a single
+            /// total order with other `SeqCst` operations.
             #[inline(never)]
             pub fn load(&self, order: AtomicOrdering) -> $ty {
                 let _ = order;
@@ -387,6 +448,12 @@ macro_rules! define_float_atomic {
             /// Atomically store a value.
             ///
             /// `order` must be `Relaxed`, `Release`, or `SeqCst`.
+            ///
+            /// Hardware mapping: LLVM `store atomic` scoped to the type's
+            /// CUDA scope. Lowered to PTX
+            /// `st.{relaxed|release|sc}.{scope}.b32/b64`. `Release`
+            /// ensures all prior memory operations are visible before
+            /// the store; `SeqCst` is the strongest ordering.
             #[inline(never)]
             pub fn store(&self, val: $ty, order: AtomicOrdering) {
                 let _ = (val, order);
@@ -408,6 +475,10 @@ macro_rules! define_float_atomic {
             // ── Exchange ───────────────────────────────────────────────
 
             /// Atomically swap with `val` and return the **previous** value.
+            ///
+            /// Hardware mapping: PTX `atom.exch.{scope}.b32/b64`, LLVM
+            /// `atomicrmw xchg`. The exchange is atomic at the type's
+            /// scope and obeys the supplied ordering.
             #[inline(never)]
             pub fn swap(&self, val: $ty, order: AtomicOrdering) -> $ty {
                 let _ = (val, order);

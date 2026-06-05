@@ -132,19 +132,27 @@ impl<T, const N: usize, const ALIGN: usize> SharedArray<T, N, ALIGN> {
     };
 
     /// Returns the array length.
+    ///
+    /// This is a compile-time constant (`N`). It generates no runtime
+    /// instruction on the GPU.
     #[inline(always)]
     pub const fn len() -> usize {
         N
     }
 
     /// Returns true if the array is empty.
+    ///
+    /// Compile-time fold of `N == 0`; no runtime instruction.
     #[inline(always)]
     pub const fn is_empty() -> bool {
         N == 0
     }
 
     /// Returns the alignment in bytes.
-    /// Returns 0 if natural alignment is used.
+    ///
+    /// Returns `ALIGN`, the const-generic alignment parameter. A value of
+    /// `0` means natural alignment; `128` is required for TMA destinations.
+    /// This is a compile-time constant and generates no runtime instruction.
     #[inline(always)]
     pub const fn alignment() -> usize {
         ALIGN
@@ -374,6 +382,9 @@ pub struct DynamicSharedArray<T, const ALIGN: usize = 16>(PhantomData<UnsafeCell
 
 impl<T, const ALIGN: usize> DynamicSharedArray<T, ALIGN> {
     /// Returns the alignment in bytes for this dynamic shared memory.
+    ///
+    /// Returns `ALIGN`, the const-generic alignment parameter. This is a
+    /// compile-time constant and generates no runtime instruction.
     #[inline(always)]
     pub const fn alignment() -> usize {
         ALIGN

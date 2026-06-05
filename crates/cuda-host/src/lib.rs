@@ -87,10 +87,15 @@
 //! let c_host = c_dev.to_host_vec(&stream)?;
 //! ```
 
+/// Load embedded CUDA modules (cubin, PTX, NVVM IR, LTOIR) from the host binary.
 pub mod embedded;
+/// Kernel launch traits and argument marshalling (`CudaKernel`, `GenericCudaKernel`, etc.).
 pub mod launch;
+/// LTOIR pipeline: compile NVVM IR + libdevice → cubin via libNVVM and nvJitLink.
 pub mod ltoir;
+/// Tensor-core tiling layouts (K-major, MN-major) for tcgen05.
 pub mod tiling;
+/// Stable 128-bit type identifiers for generic kernel PTX naming.
 pub mod type_id;
 
 pub use launch::{
@@ -98,8 +103,10 @@ pub use launch::{
     push_kernel_device_slice, push_kernel_scalar, read_only_device_buffer_arg,
     writable_device_buffer_arg,
 };
+/// Re-export of `type_id_u128` for computing backend-compatible type hashes.
 pub use type_id::type_id_u128;
 
+/// Async kernel launch traits and helpers (requires `async` feature).
 #[cfg(feature = "async")]
 pub use launch::{
     KernelSliceArg, KernelSliceArgMut, load_cuda_module_from_async_context,
@@ -108,11 +115,14 @@ pub use launch::{
     set_async_kernel_cluster_dim,
 };
 
+/// Re-export of the `cuda_async` runtime (requires `async` feature).
 #[cfg(feature = "async")]
 pub use cuda_async;
+/// Re-export of async kernel launch handle types (requires `async` feature).
 #[cfg(feature = "async")]
 pub use cuda_async::launch::{AsyncKernelLaunch, OwnedAsyncKernelLaunch};
 
+/// Re-export of embedded module loading helpers and error types.
 pub use embedded::{EmbeddedModuleError, load_embedded_module, load_first_embedded_module};
 /// Loads a compiled kernel module by name. Tries `<name>.cubin`, then
 /// `<name>.ptx`, and finally falls through to the LTOIR build path
@@ -123,6 +133,7 @@ pub use embedded::{EmbeddedModuleError, load_embedded_module, load_first_embedde
 pub use ltoir::{LtoirError, load_kernel_module};
 
 // Re-export launch macros from cuda-macros for convenience.
+/// Re-export of `cuda_macros::cuda_launch` and `cuda_macros::cuda_module` proc macros.
 pub use cuda_macros::{cuda_launch, cuda_module};
 
 /// Re-export of [`cuda_macros::cuda_launch_async`].
@@ -132,6 +143,7 @@ pub use cuda_macros::{cuda_launch, cuda_module};
 /// suspend.
 #[cfg(feature = "async")]
 pub use cuda_macros::cuda_launch_async;
+/// Re-export of tcgen05 tiling utilities and constants.
 pub use tiling::{
     TILE_SIZE, k_major_index, mn_major_index, print_layout_indices, to_k_major_f16, to_mn_major_f16,
 };

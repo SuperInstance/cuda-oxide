@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#![warn(missing_docs)]
 //! Async execution layer for CUDA device operations.
 //!
 //! This crate provides a futures-based interface for composing, scheduling, and
