@@ -1,17 +1,65 @@
 # cuda-host
 
-Host-side infrastructure for typed CUDA module loading and kernel launches in
-cuda-oxide.
+Host-side runtime for cuda-oxide. This crate sits between the CUDA driver
+(`cuda-core`) and the proc macros (`cuda-macros`). It provides typed module
+loading, kernel launch infrastructure, device memory helpers, and the LTOIR
+build pipeline for kernels that use CUDA libdevice math.
 
-The primary interface is `#[cuda_module]`. Place kernels in an inline module,
-keep `#[kernel]` on the actual GPU entry points, then load the embedded device
-artifact as a typed Rust value.
+## Relationship to cuda-core
+
+| Crate | Responsibility |
+|-------|---------------|
+| `cuda-core` | Raw CUDA driver API: `CudaContext`, `CudaStream`, `CudaModule`, `DeviceBuffer`, `launch_kernel_on_stream`, embedded artifact sections |
+| `cuda-host` | Typed convenience layer: `#[cuda_module]` loader, `CudaKernel` / `GenericCudaKernel` traits, LTOIR-to-cubin pipeline, tensor-core tiling utilities |
+| `cuda-async` | Futures-based scheduling on top of `cuda-host` + `cuda-core` |
+
+`cuda-host` re-exports the `#[cuda_module]` and `cuda_launch!` macros from
+`cuda-macros`, and adds the traits and helpers those macros expand into.
+
+## Memory management
+
+### `DeviceBuffer<T>` (from `cuda-core`)
+
+The primary typed device allocation. `cuda-host` does not reimplement allocation;
+it relies on `cuda-core::DeviceBuffer` and adds kernel-argument marshalling
+helpers around it.
 
 ```rust
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig};
-use cuda_device::{DisjointSlice, kernel, thread};
-use cuda_host::cuda_module;
 
+let ctx = CudaContext::new(0)?;
+let stream = ctx.default_stream();
+
+// Allocate and upload
+let a_dev = DeviceBuffer::from_host(&stream, &vec![1.0f32; 1024])?;
+let mut b_dev = DeviceBuffer::<f32>::zeroed(&stream, 1024)?;
+
+// Download
+let b_host: Vec<f32> = b_dev.to_host_vec(&stream)?;
+```
+
+### Kernel argument marshalling
+
+`cuda-host` provides the boundary between Rust types and the `Vec<*mut c_void>`
+that `cuLaunchKernel` expects:
+
+| Rust type | Kernel parameter | Marshalling |
+|-----------|-----------------|-------------|
+| `T: Copy` (scalar, struct, closure) | `T` | `&mut value` as `*mut c_void` |
+| `&DeviceBuffer<T>` | `&[T]` | `(CUdeviceptr, u64)` — two args |
+| `&mut DeviceBuffer<T>` | `&mut [T]` or `DisjointSlice<T>` | `(CUdeviceptr, u64)` — two args |
+
+ZST scalars (e.g., zero-capture closures, unit structs) are automatically
+skipped on both host and device so the parameter indices stay aligned.
+
+## Kernel launching mechanics
+
+### The `#[cuda_module]` generated API
+
+Place `#[cuda_module]` on an inline module containing `#[kernel]` functions.
+The macro generates:
+
+```rust
 #[cuda_module]
 mod kernels {
     use super::*;
@@ -24,32 +72,9 @@ mod kernels {
         }
     }
 }
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ctx = CudaContext::new(0)?;
-    let stream = ctx.default_stream();
-
-    const N: usize = 1024;
-    let a_dev = DeviceBuffer::from_host(&stream, &vec![1.0f32; N])?;
-    let b_dev = DeviceBuffer::from_host(&stream, &vec![2.0f32; N])?;
-    let mut c_dev = DeviceBuffer::<f32>::zeroed(&stream, N)?;
-
-    let module = kernels::load(&ctx)?;
-    module.vecadd(
-        &stream,
-        LaunchConfig::for_num_elems(N as u32),
-        &a_dev,
-        &b_dev,
-        &mut c_dev,
-    )?;
-
-    Ok(())
-}
 ```
 
-## Generated API
-
-`#[cuda_module]` adds these items to the annotated module:
+Generated items:
 
 | Item | Purpose |
 |------|---------|
@@ -57,94 +82,135 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `load(&Arc<CudaContext>)` | Load the current crate's embedded artifact bundle |
 | `load_named(&Arc<CudaContext>, name)` | Load a specific embedded bundle by name |
 | `from_module(Arc<CudaModule>)` | Wrap an already-loaded CUDA module |
-| `LoadedModule::{kernel}` | One launch method per `#[kernel]` function |
+| `LoadedModule::{kernel}` | One typed launch method per `#[kernel]` function |
 | `load_async(device_id)` | With feature `async`, load from a `cuda-async` device context |
 | `LoadedModule::{kernel}_async` | With feature `async`, build a lazy `AsyncKernelLaunch` |
-| `LoadedModule::{kernel}_async_owned` | With feature `async`, build an owned async launch that returns its buffers |
+| `LoadedModule::{kernel}_async_owned` | With feature `async`, owned async launch that returns buffers |
 
-Kernel parameters are mapped into host launch parameters:
-
-| Kernel parameter | Host method parameter |
-|------------------|-----------------------|
-| `&[T]` | `&DeviceBuffer<T>` |
-| `&mut [T]` | `&mut DeviceBuffer<T>` |
-| `DisjointSlice<T>` | `&mut DeviceBuffer<T>` |
-| `Copy` scalar, struct, closure, or raw pointer | unchanged |
-
-Because the launches are ordinary methods, rust-analyzer and rustc can complete
-kernel names, show argument names, and type-check arguments before the program
-runs. By-value arguments are copied into the CUDA launch packet through the
-`KernelScalar` boundary; device slices are encoded as pointer-plus-length pairs.
-
-Enable the `async` feature to generate async launch methods. They use the same
-scalar mapping, but take no stream argument:
+### Synchronous launch
 
 ```rust
-use cuda_async::device_operation::DeviceOperation;
+let ctx = CudaContext::new(0)?;
+let stream = ctx.default_stream();
+let module = kernels::load(&ctx)?;
 
+module.vecadd(
+    &stream,
+    LaunchConfig::for_num_elems(1024),
+    &a_dev,
+    &b_dev,
+    &mut c_dev,
+)?;
+```
+
+The launch method:
+1. Looks up the cached `CudaFunction` (or loads it from the module).
+2. Marshals arguments into a `Vec<*mut c_void>`.
+3. Calls `cuda_core::launch_kernel_on_stream` (or `launch_kernel_ex_on_stream` for cluster launches).
+
+### Generic kernels and PTX name resolution
+
+Non-generic kernels have a fixed PTX name (`vecadd`). Generic kernels are named
+`<base>_TID_<hex32>`, where `<hex32>` is a 32-char lowercase hex hash of the
+tuple of generic type parameters. Both the backend (inside `rustc_codegen_cuda`)
+and the host (`cuda_host::type_id_u128::<(T0, T1, ...)>()`)
+compute the same hash via `tcx.type_id_hash`, so the strings match byte-for-byte.
+
+The `GenericCudaKernel` trait provides `ptx_name() -> &'static str` for runtime
+lookup, and a volatile-pointer monomorphization trick ensures the kernel appears
+in the codegen unit even without a host-side call.
+
+## Stream management
+
+`cuda-host` does not own streams directly — that lives in `cuda-core` and
+`cuda-async`. However, all synchronous launch methods take a `&CudaStream`
+argument, making stream usage explicit:
+
+```rust
+let stream = ctx.new_stream()?;  // from cuda-core
+module.vecadd(&stream, config, &a, &b, &mut c)?;
+stream.synchronize()?;
+```
+
+When the `async` feature is enabled, `cuda-host` generates async launch methods
+that defer stream selection to the `cuda-async` scheduling policy:
+
+```rust
 let module = kernels::load_async(0)?;
 module
-    .vecadd_async(LaunchConfig::for_num_elems(N as u32), &a_dev, &b_dev, &mut c_dev)?
+    .vecadd_async(LaunchConfig::for_num_elems(1024), &a_dev, &b_dev, &mut c_dev)?
     .sync()?;
 ```
 
-For async launches, device-slice parameters accept either `DeviceBuffer<T>` or
-`cuda_async::device_box::DeviceBox<[T]>`. Borrowed methods return
-`AsyncKernelLaunch<'_>`, so Rust keeps referenced buffers and non-`'static`
-scalar arguments borrowed until the lazy operation is dropped, `.sync()` has
-returned, or `.await` has completed.
+## LTOIR pipeline (libNVVM + nvJitLink)
 
-Use `{kernel}_async_owned` when the operation needs to leave the current stack
-frame, for example in a spawned Tokio task or a long-lived pipeline:
+When a kernel uses Rust float math intrinsics (`sin`, `cos`, `exp`, `pow`, ...),
+cuda-oxide auto-detects them, emits NVVM IR (`.ll`) instead of PTX, and skips
+`llc`. At runtime `cuda-host::ltoir` builds the cubin on demand:
+
+1. **libNVVM** compiles the NVVM IR + `libdevice.10.bc` to LTOIR.
+2. **nvJitLink** links the LTOIR with `-arch=sm_XX -lto` to produce a cubin.
+3. The cubin is loaded via `cuModuleLoad`.
 
 ```rust
-let (a_dev, b_dev, c_dev) = module
-    .vecadd_async_owned(LaunchConfig::for_num_elems(N as u32), a_dev, b_dev, c_dev)?
-    .await?;
+use cuda_host::ltoir;
+
+// Loads my_kernel.cubin, or builds it from my_kernel.ll automatically.
+let module = ltoir::load_kernel_module(&ctx, "my_kernel")?;
 ```
 
-Owned async launch methods take device-slice arguments by value, keep them alive
-for the GPU work, and return them as the operation output after completion.
-Scalar arguments for owned async launches must be `'static`.
+Discovery:
+- **libNVVM**: `LIBNVVM_PATH` → system loader → `<CUDA>/nvvm/lib64/libnvvm.so`
+- **nvJitLink**: `<CUDA>/lib64/libnvJitLink.so`
+- **libdevice**: `CUDA_OXIDE_LIBDEVICE` → `<CUDA>/nvvm/libdevice/libdevice.10.bc`
+- **Arch**: `CUDA_OXIDE_TARGET` env var, defaulting to `sm_120`
 
-## Lower-Level Pieces
+## Embedded module loading
 
-`CudaKernel` and `GenericCudaKernel` remain the marker traits generated by
-`#[kernel]` and used by the typed loader. `cuda_launch!` remains available as a
-low-level migration path for cuda-oxide kernels, but new host code should prefer
-`#[cuda_module]`.
+Device artifacts (PTX, cubin, NVVM IR, LTOIR) are embedded into the host binary
+at compile time by the codegen backend. `cuda-host::embedded` reads the artifact
+section and picks the best payload:
 
-`cuda_launch_async!` is also lower-level. It can describe lazy work from raw
-device pointers, so callers must ensure the pointed-to allocations outlive the
-operation. Generated borrowed async methods encode that requirement as Rust
-borrows, and generated owned async methods move buffers into the operation for
-spawned tasks.
+1. Cubin — load directly.
+2. PTX — JIT-compile via the driver.
+3. NVVM IR — build cubin via the LTOIR pipeline.
+4. LTOIR — link via nvJitLink.
 
-`#[cuda_module]` owns launch ergonomics, not target-selection policy. It loads
-whatever embedded payload the compiler produced for the current crate. PTX and
-cubin payloads load directly; embedded NVVM IR/LTOIR is built to a cubin with
-the same libNVVM/nvJitLink path used by the sidecar loader. Fatbin or
-multi-architecture packaging decisions belong in the compiler and artifact
-layers, so the typed launch API does not need to change when those payload
-formats evolve.
+```rust
+use cuda_host::embedded;
 
-## Tiling Utilities (tcgen05)
+let module = embedded::load_embedded_module(&ctx, env!("CARGO_PKG_NAME"))?;
+```
+
+## Tensor-core tiling (tcgen05)
 
 Host-side layout transformations for Blackwell tensor cores. tcgen05 requires
-specific 8x8 tile arrangements:
+specific 8×8 tile arrangements:
 
 | Function | Description |
 |----------|-------------|
-| `to_k_major_f16` | Row-major to tcgen05 K-major, matrix A |
-| `to_mn_major_f16` | Row-major to tcgen05 MN-major, matrix B |
-| `k_major_index` | Compute linear index in K-major layout |
-| `mn_major_index` | Compute linear index in MN-major layout |
-| `print_layout_indices` | Debug print layout as 2D table |
+| `to_k_major_f16` | Row-major → tcgen05 K-major (matrix A) |
+| `to_mn_major_f16` | Row-major → tcgen05 MN-major (matrix B) |
+| `k_major_index` | Linear index in K-major layout |
+| `mn_major_index` | Linear index in MN-major layout |
+| `print_layout_indices` | Debug print as 2D table |
 | `TILE_SIZE` | Constant `8` |
 
-## Further Reading
+## Lower-level APIs
 
-- [cuda-device](../cuda-device/) -- device-side intrinsics
-- [cuda-macros](../cuda-macros/) -- proc-macro implementations
-- [cuda-core](../cuda-core/) -- CUDA driver API, `DeviceBuffer`, `LaunchConfig`
-- [cuda-async](../cuda-async/) -- async scheduling
+`CudaKernel` and `GenericCudaKernel` remain the marker traits generated by
+`#[kernel]`. `cuda_launch!` is available as a lower-level migration path, but
+new code should prefer `#[cuda_module]` typed methods.
+
+`cuda_launch_async!` is also lower-level. It can describe lazy work from raw
+device pointers, so callers must ensure pointed-to allocations outlive the
+operation. Generated borrowed async methods encode that requirement as Rust
+borrows; generated owned async methods move buffers into the operation for
+spawned tasks.
+
+## Further reading
+
+- [cuda-device](../cuda-device/) — device-side intrinsics (`thread`, `DisjointSlice`, etc.)
+- [cuda-macros](../cuda-macros/) — proc-macro implementations
+- [cuda-core](../cuda-core/) — CUDA driver API, `DeviceBuffer`, `LaunchConfig`
+- [cuda-async](../cuda-async/) — async scheduling and stream pools
