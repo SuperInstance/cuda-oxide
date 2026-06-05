@@ -195,11 +195,42 @@ extern crate rustc_public;
 extern crate rustc_public_bridge;
 extern crate rustc_span;
 
+/// Error types for MIR→Pliron translation failures.
+///
+/// See [`TranslationErr`] for categorized error kinds and [`TranslationResult`]
+/// for the result type used throughout this crate.
 pub mod error;
+
+/// End-to-end compilation pipeline from `dialect-mir` to PTX / NVVM IR / LTOIR.
+///
+/// See [`run_pipeline`] for the main entry point and [`PipelineConfig`] for
+/// configuration options.
 pub mod pipeline;
+
+/// Rust MIR → `dialect-mir` translator.
+///
+/// The core translation logic. Start with [`translator::translate_function`] or,
+/// for full pipeline integration, use [`run_pipeline`] which calls
+/// [`translator::body::translate_body`] internally.
 pub mod translator;
 
+/// Categorized translation error type with source-location support.
+///
+/// Used with pliron's `input_err!` macro to produce rich error messages that
+/// include MIR span locations and backtraces.
 pub use error::{TranslationErr, TranslationResult};
+
+/// Public pipeline API: drive MIR functions through lowering to GPU artifacts.
+///
+/// | Item | Role |
+/// |------|------|
+/// | [`run_pipeline`] | Main entry point: translate → mem2reg → lower → export → PTX |
+/// | [`PipelineConfig`] | Output paths, dumps, verbose mode, NVVM IR toggle |
+/// | [`PipelineError`] | Stage-specific failure enum |
+/// | [`CollectedFunction`] | A monomorphized Rust function tagged for GPU compilation |
+/// | [`DeviceExternDecl`] / [`DeviceExternAttrs`] | External device declarations for nvJitLink LTOIR |
+/// | [`CompilationResult`] | Paths and target arch produced by a successful run |
+/// | [`CompilationArtifactKind`] | Kind of artifact returned (PTX, NVVM IR, LTOIR, CUBIN) |
 pub use pipeline::{
     CollectedFunction, CompilationArtifactKind, CompilationResult, DeviceExternAttrs,
     DeviceExternDecl, PipelineConfig, PipelineError, run_pipeline,
