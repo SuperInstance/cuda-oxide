@@ -71,6 +71,8 @@ impl CudaContext {
         let flags = flags.unwrap_or(cuda_bindings::CUevent_flags_enum_CU_EVENT_DISABLE_TIMING);
         self.bind_to_thread()?;
         let mut cu_event = MaybeUninit::uninit();
+        // SAFETY: cu_event is a valid MaybeUninit out-param; bind_to_thread() above
+        // ensures the context is current so cuEventCreate attaches the event to it.
         let cu_event = unsafe {
             cuda_bindings::cuEventCreate(cu_event.as_mut_ptr(), flags).result()?;
             cu_event.assume_init()
@@ -100,6 +102,8 @@ impl CudaEvent {
     /// the waiting stream until all work prior to the record point completes.
     pub fn record(&self, stream: &CudaStream) -> Result<(), DriverError> {
         self.ctx.bind_to_thread()?;
+        // SAFETY: bind_to_thread() makes the owning context current; cu_event and
+        // stream.cu_stream() are valid handles from the same context.
         unsafe { cuda_bindings::cuEventRecord(self.cu_event, stream.cu_stream()).result() }
     }
 
@@ -107,6 +111,7 @@ impl CudaEvent {
     /// preceding stream work has completed.
     pub fn synchronize(&self) -> Result<(), DriverError> {
         self.ctx.bind_to_thread()?;
+        // SAFETY: bind_to_thread() makes the owning context current; cu_event is valid.
         unsafe { cuda_bindings::cuEventSynchronize(self.cu_event).result() }
     }
 
@@ -122,6 +127,8 @@ impl CudaEvent {
         self.synchronize()?;
         end.synchronize()?;
         let mut ms: f32 = 0.0;
+        // SAFETY: ms is a valid f32 out-param; self and end have been synchronized
+        // above so both events are recorded and their timing data is available.
         unsafe {
             cuda_bindings::cu_event_elapsed_time(&mut ms as *mut _, self.cu_event, end.cu_event)
                 .result()?;

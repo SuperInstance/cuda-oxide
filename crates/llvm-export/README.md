@@ -74,6 +74,11 @@ declarations.
 | Data layout    | 64-bit pointers, 128-bit i128 alignment  |
 | PTX version    | 8.7+ (for sm_120)                        |
 
+## Documentation
+
+All public API items carry `///` doc comments.  Run `cargo doc -p llvm-export --open`
+to browse the rendered docs, including the pipeline diagram in `lib.rs`.
+
 ## Registration
 
 Registration is automatic. Every dialect, op, type, and attribute linked into

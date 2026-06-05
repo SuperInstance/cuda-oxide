@@ -62,6 +62,8 @@ unsafe impl Sync for CudaModule {}
 impl Drop for CudaModule {
     fn drop(&mut self) {
         self.ctx.record_err(self.ctx.bind_to_thread());
+        // SAFETY: cu_module is a valid CUmodule created by cuModuleLoad*; Drop has
+        // exclusive ownership so cuModuleUnload executes exactly once.
         self.ctx
             .record_err(unsafe { cuda_bindings::cuModuleUnload(self.cu_module).result() });
     }
@@ -83,6 +85,8 @@ impl CudaContext {
     ) -> Result<Arc<CudaModule>, DriverError> {
         self.bind_to_thread()?;
         let c_src = CString::new(ptx_src).unwrap();
+        // SAFETY: c_src is null-terminated PTX; cu_module is a MaybeUninit out-param
+        // initialized by cuModuleLoadData on CUDA_SUCCESS.
         let cu_module = unsafe {
             let mut cu_module = MaybeUninit::uninit();
             cuda_bindings::cuModuleLoadData(cu_module.as_mut_ptr(), c_src.as_ptr() as *const _)
@@ -107,6 +111,8 @@ impl CudaContext {
     ) -> Result<Arc<CudaModule>, DriverError> {
         self.bind_to_thread()?;
         let image = null_terminated_image(image);
+        // SAFETY: image is null-terminated (ensured by null_terminated_image); cu_module
+        // is a MaybeUninit out-param initialized by cuModuleLoadData on CUDA_SUCCESS.
         let cu_module = unsafe {
             let mut cu_module = MaybeUninit::uninit();
             cuda_bindings::cuModuleLoadData(cu_module.as_mut_ptr(), image.as_ptr() as *const _)
@@ -134,6 +140,8 @@ impl CudaContext {
         self.bind_to_thread()?;
         let c_str = CString::new(filename).unwrap();
         let mut cu_module = MaybeUninit::uninit();
+        // SAFETY: c_str is a null-terminated path; cu_module is a MaybeUninit
+        // out-param initialized by cuModuleLoad on CUDA_SUCCESS.
         let cu_module = unsafe {
             cuda_bindings::cuModuleLoad(cu_module.as_mut_ptr(), c_str.as_ptr()).result()?;
             cu_module.assume_init()
@@ -241,6 +249,8 @@ impl CudaModule {
     pub fn load_function(self: &Arc<Self>, fn_name: &str) -> Result<CudaFunction, DriverError> {
         self.ctx.bind_to_thread()?;
         let c_name = CString::new(fn_name).unwrap();
+        // SAFETY: cu_function is a MaybeUninit out-param; bind_to_thread() above
+        // ensures the context is current so cuModuleGetFunction can resolve the symbol.
         let cu_function = unsafe {
             let mut cu_function = MaybeUninit::uninit();
             cuda_bindings::cuModuleGetFunction(

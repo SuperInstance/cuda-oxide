@@ -3,16 +3,66 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! LLVM dialect for cuda-oxide.
+//! LLVM dialect shim and textual LLVM IR exporter for cuda-oxide.
 //!
-//! The dialect *modeling* (types, ops, attributes, op-interfaces) now lives
-//! upstream in [`pliron_llvm`]; this crate is a thin shim that re-exports it so
-//! existing `llvm_export::{ops,types,attributes,op_interfaces}` paths keep
-//! resolving, plus the small set of GPU-specific extensions pliron-llvm does
-//! not carry (named address spaces, syncscope enum, fp16 bit helpers). The
-//! pure-Rust textual `.ll` exporter ([`export`]) stays here: pliron-llvm only
-//! emits real `.ll` via an `llvm-sys` bridge, which is exactly what cuda-oxide
-//! is avoiding.
+//! This crate sits at the back-end of the cuda-oxide compiler pipeline.  It
+//! receives an LLVM-dialect module (produced by [`mir-lower`]) and serialises
+//! it to textual LLVM IR (`.ll`) that `llc` can assemble into PTX.
+//!
+//! # Pipeline Position
+//!
+//! ```text
+//! Rust source code
+//!        │
+//!        ▼
+//! ┌──────────────┐
+//! │   rustc      │  (Stable MIR extraction)
+//! └──────┬───────┘
+//!        │
+//!        ▼
+//! ┌──────────────┐
+//! │ mir-importer │  (Stable MIR → dialect-mir)
+//! └──────┬───────┘
+//!        │
+//!        ▼
+//! ┌──────────────┐
+//! │  mir-lower   │  (dialect-mir → LLVM dialect)
+//! └──────┬───────┘
+//!        │
+//!        ▼
+//! ┌──────────────┐
+//! │ llvm-export  │  ◄── THIS CRATE (LLVM dialect → textual .ll)
+//! └──────┬───────┘
+//!        │
+//!        ▼
+//! ┌──────────────┐
+//! │     llc      │  (LLVM IR → PTX)
+//! └──────────────┘
+//!        │
+//!        ▼
+//!     *.ptx
+//! ```
+//!
+//! # What Lives Here
+//!
+//! * **Re-exports** – [`pliron_llvm`] types, ops, attributes and op-interfaces
+//!   so that `llvm_export::{ops,types,…}` paths keep resolving after the
+//!   upstream migration.
+//! * **GPU extensions** – named NVPTX address spaces, [`LlvmSyncScope`],
+//!   convergent inline-asm helpers, fp16 bit helpers, and explicit alignment
+//!   on globals.
+//! * **Textual exporter** – the [`export`] module walks an LLVM-dialect module
+//!   and prints stable, deterministic `.ll` text (no `llvm-sys` dependency).
+//!
+//! # Passes / Steps
+//!
+//! 1. **Name assignment** – deterministic SSA names so output is stable across
+//!    runs (see `export::names`).
+//! 2. **PHI translation** – pliron uses block arguments; LLVM IR uses PHI nodes.
+//!    The exporter builds a predecessor map and emits `phi` instructions.
+//! 3. **Metadata emission** – `!nvvm.annotations`, `!nvvmir.version`,
+//!    `@llvm.used`, launch bounds and cluster config.
+//! 4. **Extern declaration** – `declare` statements for device FFI symbols.
 //!
 //! Registration is automatic: every dialect/op/type/attribute linked into the
 //! binary registers itself when a [`pliron::context::Context`] is created
