@@ -1,3 +1,24 @@
+//! Procedural macros for defining CUDA kernels in Rust.
+//!
+//! This crate provides two key macros:
+//!
+//! - `#[kernel]` — Marks a function as a GPU kernel entry point
+//! - `#[cuda_module]` — Generates a typed module wrapper that embeds compiled PTX
+//!
+//! # How It Works
+//!
+//! `#[kernel]` extracts the annotated function and passes it through the
+//! cuda-oxide compilation pipeline (Rust → MIR → Pliron IR → NVVM → PTX).
+//! The compiled PTX is then embedded in the host binary as an artifact.
+//!
+//! `#[cuda_module]` generates a `struct` with typed launch methods for each
+//! `#[kernel]` function, providing compile-time checking of kernel arguments.
+//!
+//! # Captured Closures
+//!
+//! Kernels can accept closures with captured variables. The macro serializes
+//! captures into kernel parameters automatically:
+
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0

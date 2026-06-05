@@ -1,3 +1,15 @@
+//! Host-side CUDA runtime.
+//!
+//! `cuda-host` provides low-level host-side operations: device memory management,
+//! kernel module loading, and stream-based execution. It wraps the CUDA Driver API
+//! with safe Rust abstractions.
+//!
+//! # Relationship to cuda-core
+//!
+//! `cuda-core` is the high-level API built on top of `cuda-host`. Most users should
+//! prefer `cuda-core` for its ergonomic interface. Use `cuda-host` when you need
+//! fine-grained control over the driver API.
+
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0

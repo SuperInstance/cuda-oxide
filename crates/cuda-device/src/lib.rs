@@ -1,3 +1,42 @@
+//! Device-side GPU programming abstractions.
+//!
+//! `cuda-device` provides the programming model for code that runs **on the GPU**.
+//! It exposes thread indexing, shared memory, warp-level primitives, atomics,
+//! barriers, cooperative groups, tensor core operations (wgmma, tcgen05), and
+//! TMA (Tensor Memory Accelerator) — all in safe, idiomatic Rust.
+//!
+//! # Programming Model
+//!
+//! GPU code runs in a SIMT (Single Instruction, Multiple Thread) model:
+//!
+//! ```text
+//! Grid (dim3 gridDim)
+//!  └── Block (dim3 blockIdx, dim3 blockDim)
+//!       └── Thread (1D/2D/3D index)
+//! ```
+//!
+//! # Key Modules
+//!
+//! | Module              | Purpose                                    |
+//! |---------------------|--------------------------------------------|
+//! | `thread`            | Thread indexing (1D, 2D, 3D)              |
+//! | `shared`            | Shared memory management                   |
+//! | `atomic`            | Scoped atomic operations                   |
+//! | `barrier`           | Block-level synchronization                |
+//! | `warp`              | Warp shuffle, vote, reduce                 |
+//! | `cooperative_groups`| Cooperative group abstractions              |
+//! | `wgmma`             | Warp Group Matrix Multiply Accumulate      |
+//! | `tcgen05`           | Tensor Core generation 0.5 operations      |
+//! | `tma`               | Tensor Memory Accelerator                  |
+//!
+//! # Relationship to Other Crates
+//!
+//! - **cuda-core**: Host-side API that *launches* kernels defined with cuda-device
+//! - **cuda-macros**: `#[kernel]` attribute that marks functions for GPU compilation
+//! - **cuda-async**: Async version of kernel launch and memory operations
+//!
+//! Code in this crate runs on the device. It is compiled to PTX by `rustc-codegen-cuda`.
+
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0

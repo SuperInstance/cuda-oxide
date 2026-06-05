@@ -1,3 +1,45 @@
+//! MIR Importer — Translates Rust's Stable MIR into Pliron IR.
+//!
+//! This is the compiler frontend for cuda-oxide. It takes Rust's Mid-level IR
+//! (MIR) produced by `rustc` and imports it into the Pliron IR framework, where
+//! it can be analyzed, transformed, and lowered to GPU code.
+//!
+//! # Pipeline Position
+//!
+//! ```text
+//! Rust Source
+//!     ↓ rustc (standard compilation)
+//! Stable MIR
+//!     ↓ THIS CRATE (mir-importer)
+//! Pliron IR (dialect-mir)
+//!     ↓ mir-lower
+//! Pliron IR (dialect-nvvm / LLVM dialect)
+//!     ↓ llvm-export
+//! LLVM IR text
+//!     ↓ nvvm / ptxas
+//! PTX / CUBIN
+//! ```
+//!
+//! # What Gets Translated
+//!
+//! - Function signatures → Pliron function operations
+//! - Basic blocks → Pliron regions and blocks
+//! - Local variables → Alloca operations (later promoted to SSA by mem2reg)
+//! - Binary/unary ops → dialect-mir arithmetic operations
+//! - Terminators (switch, return, call) → dialect-mir control flow
+//! - Types (integers, floats, structs, enums, slices) → dialect-mir types
+//!
+//! # Key Concepts
+//!
+//! **Stable MIR**: The public interface to Rust's MIR, providing a stable
+//! representation of Rust programs that can be consumed by external tools.
+//!
+//! **Pliron**: An MLIR-like IR framework written in Rust. It provides the
+//! infrastructure for defining dialects, operations, types, and transformations.
+//!
+//! **Dialects**: `mir-importer` produces operations in the `dialect-mir` dialect,
+//! which preserves Rust-specific semantics before lowering to GPU-specific IR.
+
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
