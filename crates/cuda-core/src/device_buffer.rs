@@ -135,6 +135,8 @@ impl<T> Drop for DeviceBuffer<T> {
     fn drop(&mut self) {
         if self.ptr != 0 {
             self.ctx.record_err(self.ctx.bind_to_thread());
+            // SAFETY: ptr is a non-zero CUdeviceptr allocated by cuMemAlloc*; Drop
+            // has exclusive ownership so free_sync executes exactly once.
             self.ctx
                 .record_err(unsafe { crate::memory::free_sync(self.ptr) });
         }
@@ -212,7 +214,11 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         let len = data.len();
         let num_bytes = std::mem::size_of_val(data);
 
+        // SAFETY: num_bytes = size_of_val(data) which is well-defined; a context is
+        // current because stream holds a valid CudaStream.
         let ptr = unsafe { crate::memory::malloc_sync(num_bytes)? };
+        // SAFETY: ptr has num_bytes bytes just allocated; data.as_ptr() is valid for
+        // num_bytes readable bytes; stream.cu_stream() is valid.
         unsafe {
             crate::memory::memcpy_htod_async(ptr, data.as_ptr(), num_bytes, stream.cu_stream())?;
         }
@@ -269,8 +275,10 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         let ctx = stream.context().clone();
         let num_bytes = len * std::mem::size_of::<T>();
 
+        // SAFETY: num_bytes is non-negative; stream carries a valid context.
         let ptr = unsafe { crate::memory::malloc_sync(num_bytes)? };
         if num_bytes > 0 {
+            // SAFETY: ptr has num_bytes bytes just allocated; stream.cu_stream() is valid.
             unsafe {
                 crate::memory::memset_d8_async(ptr, 0, num_bytes, stream.cu_stream())?;
             }
@@ -289,6 +297,8 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     /// to read immediately.
     pub fn to_host_vec(&self, stream: &CudaStream) -> Result<Vec<T>, DriverError> {
         let mut host = Vec::with_capacity(self.len);
+        // SAFETY: host has capacity self.len so as_mut_ptr() is valid for self.len
+        // writes; self.ptr is a valid device pointer; stream.cu_stream() is valid.
         unsafe {
             crate::memory::memcpy_dtoh_async(
                 host.as_mut_ptr(),
@@ -298,6 +308,8 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             )?;
         }
         stream.synchronize()?;
+        // SAFETY: synchronize() above ensures the DtoH copy completed, so all
+        // self.len elements in the Vec's backing store are now initialized.
         unsafe { host.set_len(self.len) };
         Ok(host)
     }

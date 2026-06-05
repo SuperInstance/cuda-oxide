@@ -328,6 +328,8 @@ impl ConstantHandle {
             return Ok(());
         }
 
+        // SAFETY: bytes.as_ptr() is valid for num_bytes reads; self.dptr is a device
+        // pointer with at least num_bytes capacity (ensured by the macro-generated caller).
         unsafe {
             crate::memory::memcpy_htod_async(
                 self.dptr,
@@ -338,12 +340,16 @@ impl ConstantHandle {
         }
 
         unsafe extern "C" fn drop_staged_bytes(callback: *mut c_void) {
+            // SAFETY: callback was produced by Box::into_raw(Box::new(bytes)) below;
+            // the driver calls this trampoline exactly once after the copy completes.
             drop(unsafe {
                 Box::<Box<[MaybeUninit<u8>]>>::from_raw(callback as *mut Box<[MaybeUninit<u8>]>)
             });
         }
 
         let callback_data = Box::into_raw(Box::new(bytes)) as *mut c_void;
+        // SAFETY: callback_data is a Box<Box<[MaybeUninit<u8>]>> cast to *mut c_void;
+        // drop_staged_bytes reclaims it exactly once when the stream reaches this point.
         let callback_result = unsafe {
             cuda_bindings::cuLaunchHostFunc(
                 stream.cu_stream(),
@@ -354,6 +360,8 @@ impl ConstantHandle {
         .result();
 
         if let Err(err) = callback_result {
+            // SAFETY: cuLaunchHostFunc failed so the callback will never fire;
+            // we reclaim the Box here to avoid a leak.
             let staged = unsafe {
                 Box::<Box<[MaybeUninit<u8>]>>::from_raw(
                     callback_data as *mut Box<[MaybeUninit<u8>]>,
@@ -414,6 +422,8 @@ impl CudaModule {
         let c_name = CString::new(name).unwrap();
         let mut dptr = MaybeUninit::<cuda_bindings::CUdeviceptr>::uninit();
         let mut size = MaybeUninit::<usize>::uninit();
+        // SAFETY: dptr and size are valid MaybeUninit out-params; bind_to_thread()
+        // ensures the context is current for cuModuleGetGlobal_v2.
         unsafe {
             cuda_bindings::cuModuleGetGlobal_v2(
                 dptr.as_mut_ptr(),

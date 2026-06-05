@@ -153,6 +153,12 @@ LLVM dialect:  call void asm "tcgen05.mma.cta_group::1.kind::f16...", "..." #con
   extern globals. `DynamicSmemAlignmentMap` tracks max alignment per
   kernel for correct PTX metadata.
 
+## Documentation
+
+All public API items carry `///` doc comments.  Run `cargo doc -p mir-lower --open`
+to browse the rendered docs, including the pipeline diagram and architecture
+overview in `lib.rs`.
+
 ## Dependencies
 
 - [pliron](https://github.com/vaivaswatha/pliron) — Pliron IR (MLIR-like) framework
