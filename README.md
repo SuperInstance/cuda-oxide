@@ -24,7 +24,7 @@ The workspace combines:
 > SuperInstance adopted cuda-oxide for **systems-level GPU development** — pushing the compiler beyond research demos into production-grade tooling for high-performance computing, agent runtimes, and bare-metal GPU orchestration. The fork maintains upstream compatibility while expanding architecture documentation, crate-level modularity, and long-term stability for systems workloads.
 >
 > **What changes in this fork:**
-> - Comprehensive architecture documentation (`ARCHITECTURE.md`, `PIPELINE.md`) treating the 18-crate workspace as a compiler construction kit
+> - architecture documentation (`ARCHITECTURE.md`, `PIPELINE.md`) treating the 18-crate workspace as a compiler construction kit
 > - Systems-focused runtime hardening (`cuda-core`, `cuda-async`) for async agent pipelines and memory-virtualization workloads
 > - Crate-level READMEs for every workspace member, enabling selective reuse of individual pipeline stages
 > - Fork-specific issue tracking and CI under the `SuperInstance` GitHub org
